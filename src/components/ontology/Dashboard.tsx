@@ -3,7 +3,7 @@
 import * as React from 'react'
 import {
   Boxes, FileCode2, GitBranch, Layers, AlertTriangle, Sparkles,
-  ArrowRight, FileText, Activity, CircleDot, Clock, TrendingUp, Trophy,
+  ArrowRight, Wand2, Activity, CircleDot, Clock, TrendingUp, Trophy,
 } from 'lucide-react'
 import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend,
@@ -42,7 +42,7 @@ interface StatsResp {
     startedAt: string
     finishedAt: string | null
     summary: string | null
-    scenario: { id: string; nameZh: string; domain?: { code: string; nameZh: string; color?: string | null } | null }
+    scenario: { id: string; name: string; domain?: { code: string; nameZh: string; color?: string | null } | null }
   }>
   findingsBySeverity: Array<{ severity: string; _count: number }>
   rulesBySeverity: Array<{ severity: string; _count: number }>
@@ -108,27 +108,24 @@ export function Dashboard({ onNavigate }: { onNavigate: (k: TabKey) => void }) {
         </div>
         <div className="flex flex-col gap-3 pr-0 sm:pr-20">
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="border-emerald-200 bg-white/70 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-              v2 · 在线治理
-            </Badge>
             <span className="text-xs text-muted-foreground">
               {data.concepts} 概念 · {data.domains} 领域 · {data.rules} 规则 · {data.scenarios} 场景已就绪
             </span>
           </div>
           <h1 className="text-xl font-semibold tracking-tight text-foreground md:text-2xl">
-            欢迎使用企业级本体平台
+            欢迎使用智规平台
           </h1>
           <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            本体不是包，是"在线治理的语义资产"。平台支持在线编辑、版本快照冻结、
-            跨领域去重聚合（报销.Employee ≡ 采购.Buyer → core:Person），
-            以及人能看懂的规则 DSL —— 业务用户看中文渲染，研发看 SHACL。
+            在这里管理业务概念和规则，上传业务材料即可自动识别概念并生成校验规则。
+            不同业务领域之间可以共享通用概念（如报销中的"员工"和采购中的"采购员"可视为同一个"人员"），
+            所有规则用通俗易懂的方式呈现，业务人员也能看懂。
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button size="sm" onClick={() => onNavigate('concepts')}>
               <Boxes className="size-4" /> 浏览概念仓库
             </Button>
-            <Button size="sm" variant="outline" onClick={() => onNavigate('design')}>
-              <FileText className="size-4" /> 查看设计文档
+            <Button size="sm" variant="outline" onClick={() => onNavigate('autobuild')}>
+              <Wand2 className="size-4" /> 智能建库
             </Button>
             <Button size="sm" variant="ghost" onClick={() => onNavigate('scenario')}>
               <ArrowRight className="size-4" /> 立即试运行
@@ -140,11 +137,11 @@ export function Dashboard({ onNavigate }: { onNavigate: (k: TabKey) => void }) {
       {/* KPI 卡片 */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <KpiCard label="核心概念" value={data.coreConcepts} hint={`共 ${data.concepts} 个概念`} icon={Boxes} accent="emerald" />
-        <KpiCard label="领域数" value={data.domains} hint="已注入" icon={Layers} accent="amber" />
+        <KpiCard label="领域数" value={data.domains} hint="已创建" icon={Layers} accent="amber" />
         <KpiCard label="规则数" value={data.rules} hint="已发布" icon={FileCode2} accent="emerald" />
         <KpiCard label="运行数" value={data.runs} hint="累计" icon={Activity} accent="slate" />
         <KpiCard label="待评审等价" value={data.pendingEquivalences} hint={`共 ${data.equivalences} 条等价`} icon={GitBranch} accent="amber" />
-        <KpiCard label="Findings 数" value={data.findings} hint="累计命中" icon={AlertTriangle} accent="rose" />
+        <KpiCard label="检查结果数" value={data.findings} hint="累计命中" icon={AlertTriangle} accent="rose" />
       </div>
 
       {/* 趋势图 + 严重度饼图 */}
@@ -153,10 +150,10 @@ export function Dashboard({ onNavigate }: { onNavigate: (k: TabKey) => void }) {
           title={
             <span className="flex items-center gap-2">
               <TrendingUp className="size-4 text-emerald-500" />
-              Findings 趋势（近 14 天）
+              检查结果趋势（近 14 天）
             </span>
           }
-          description={`累计 ${trends?.totalFindings ?? 0} 条 Findings`}
+          description={`累计 ${trends?.totalFindings ?? 0} 条检查结果`}
           className="lg:col-span-2"
         >
           {trendsLoading ? (
@@ -204,10 +201,10 @@ export function Dashboard({ onNavigate }: { onNavigate: (k: TabKey) => void }) {
 
         <SectionCard
           title="规则严重度分布"
-          description={`Findings 共 ${totalFindings} 条`}
+          description={`检查结果共 ${totalFindings} 条`}
         >
           {totalFindings === 0 ? (
-            <EmptyState title="暂无 Findings" hint="去试运行一条报销单试试" icon={CircleDot} />
+            <EmptyState title="暂无检查结果" hint="去试运行一条报销单试试" icon={CircleDot} />
           ) : (
             <div className="flex flex-col items-center gap-2">
               <div className="h-44 w-full">
@@ -303,7 +300,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (k: TabKey) => void }) {
           title={
             <span className="flex items-center gap-2">
               <Activity className="size-4 text-emerald-500" />
-              领域 Findings 分布
+              领域检查结果分布
             </span>
           }
           description="近 14 天各领域的运行与命中分布"
@@ -360,7 +357,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (k: TabKey) => void }) {
         description="各领域已注册概念、规则集与场景"
       >
         {data.domainsWithCounts.length === 0 ? (
-          <EmptyState title="暂无领域" hint="执行 /api/init 注入种子" />
+          <EmptyState title="暂无领域" hint="请等待数据加载完成" />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
             {data.domainsWithCounts.map(d => {
@@ -432,7 +429,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (k: TabKey) => void }) {
                   const c = domainColor(dom?.code)
                   return (
                     <TableRow key={r.id} className="cursor-pointer text-xs" onClick={() => onNavigate('runs')}>
-                      <TableCell className="font-medium">{r.scenario?.nameZh ?? '-'}</TableCell>
+                      <TableCell className="font-medium">{r.scenario?.name ?? '-'}</TableCell>
                       <TableCell>
                         {dom && (
                           <Badge variant="outline" className={`gap-1 ${c.bg} ${c.text} border-0`}>

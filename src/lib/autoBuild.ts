@@ -173,8 +173,10 @@ export async function autoBuildOntology(
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userPrompt },
       ],
-      { jsonMode: true, temperature: 0.2, maxTokens: 8192 },
+      { jsonMode: true, temperature: 0.2, maxTokens: 12288 },
     );
+
+    console.log(`[AutoBuild] 领域=${domainHint?.code ?? '-'} 材料长度=${materials.length} 耗时=${durationMs}ms raw长度=${raw.length}`);
 
     // 解析 JSON
     let data: any = null;
@@ -189,6 +191,8 @@ export async function autoBuildOntology(
     }
 
     if (!data || typeof data !== "object") {
+      // 打印 raw 片段辅助诊断（可能被 token 截断或返回非 JSON 文本）
+      console.error(`[AutoBuild] JSON 解析失败，raw 前 500 字符：${raw.slice(0, 500)}`);
       return { ok: false, raw, error: "LLM 返回不是合法 JSON", durationMs };
     }
 

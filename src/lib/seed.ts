@@ -5,6 +5,23 @@
 import { db } from "@/lib/db"
 
 export async function ensureSeed() {
+  // ===== 默认租户 / 用户 / API Key（预留，不校验）=====
+  await db.tenant.upsert({
+    where: { code: "default" },
+    update: {},
+    create: { code: "default", name: "默认租户", status: "ACTIVE" },
+  })
+  await db.user.upsert({
+    where: { username: "admin" },
+    update: {},
+    create: { username: "admin", passwordHash: "admin", displayName: "管理员", role: "ADMIN", status: "ACTIVE", tenantId: "default" },
+  })
+  await db.apiKey.upsert({
+    where: { key: "ontology-platform-default-key" },
+    update: {},
+    create: { key: "ontology-platform-default-key", name: "默认 API Key", status: "ACTIVE", tenantId: "default" },
+  })
+
   const count = await db.concept.count()
   if (count > 0) return false
 

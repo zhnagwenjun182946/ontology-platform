@@ -4,7 +4,7 @@ import * as React from 'react'
 import { toast } from 'sonner'
 import {
   Boxes, Search, Filter, GitBranch, Tag, Link2, Target,
-  Layers3, ArrowLeftRight, Hash, CornerDownRight,
+  Layers3, ArrowLeftRight, Hash, CornerDownRight, Check, X,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -25,6 +25,7 @@ import {
   LoadingState, ErrorState, EmptyState, PageHeader, SectionCard,
   ScopeBadge, StatusBadge, SeverityBadge,
 } from './primitives'
+import { Pagination } from './Pagination'
 
 // ============ 类型 ============
 interface ConceptListItem {
@@ -84,7 +85,7 @@ export function ConceptRepo() {
       <PageHeader
         title="概念仓库"
         icon={Boxes}
-        description="核心本体 + 领域本体，跨领域概念通过等价关系聚合到核心层。"
+        description="管理所有业务概念，不同领域之间可以共享通用概念。"
         actions={
           <Tabs value={view} onValueChange={(v) => setView(v as 'list' | 'agg')}>
             <TabsList>
@@ -92,7 +93,7 @@ export function ConceptRepo() {
                 <Layers3 className="size-3.5" /> 原始列表
               </TabsTrigger>
               <TabsTrigger value="agg" className="gap-1.5">
-                <ArrowLeftRight className="size-3.5" /> 聚合视图
+                <ArrowLeftRight className="size-3.5" /> 合并视图
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -130,6 +131,14 @@ function ConceptListView() {
     )
   }, [data, q])
 
+  // 前端分页
+  const [page, setPage] = React.useState(1)
+  const pageSize = 20
+  React.useEffect(() => { setPage(1) }, [scope, q])
+  const totalPages = Math.ceil(filtered.length / pageSize)
+  const currentPage = Math.min(page, totalPages || 1)
+  const paged = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+
   return (
     <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
       {/* 左：列表 */}
@@ -147,7 +156,7 @@ function ConceptListView() {
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="搜索 URI / 名称 / 描述"
+              placeholder="搜索名称或描述"
               className="h-8 pl-8 text-sm"
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -162,7 +171,7 @@ function ConceptListView() {
             </TabsList>
           </Tabs>
         </div>
-        <div className="max-h-[640px] overflow-y-auto scrollbar-thin">
+        <div>
           {loading ? (
             <LoadingState label="加载概念…" />
           ) : error ? (
@@ -170,8 +179,9 @@ function ConceptListView() {
           ) : filtered.length === 0 ? (
             <EmptyState title="无匹配概念" />
           ) : (
+            <>
             <ul className="flex flex-col">
-              {filtered.map(c => {
+              {paged.map(c => {
                 const dc = domainColor(c.ownerDomain?.code)
                 const active = c.id === selectedId
                 return (
@@ -211,6 +221,8 @@ function ConceptListView() {
                 )
               })}
             </ul>
+            <Pagination total={filtered.length} page={currentPage} pageSize={pageSize} onChange={setPage} />
+            </>
           )}
         </div>
       </SectionCard>
@@ -223,6 +235,24 @@ function ConceptListView() {
 
 function ConceptDetailPanel({ id }: { id: string | null }) {
   const { data, loading, error, refetch } = useFetch<ConceptDetail>(id ? `/concepts/${id}` : null)
+  const [reviewing, setReviewing] = React.useState<string | null>(null)
+
+  const handleReview = async (equivalenceId: string, status: 'CONFIRMED' | 'REJECTED') => {
+    if (!id) return
+    setReviewing(equivalenceId)
+    try {
+      await api(`/concepts/${id}/equivalences`, {
+        method: 'PATCH',
+        json: { equivalenceId, status },
+      })
+      toast.success(status === 'CONFIRMED' ? '已确认等价关系' : '已拒绝等价关系')
+      refetch()
+    } catch (e: any) {
+      toast.error('评审失败', { description: e.message })
+    } finally {
+      setReviewing(null)
+    }
+  }
 
   if (!id) return <SectionCard title="概念详情"><EmptyState title="选择左侧概念查看详情" /></SectionCard>
   if (loading) return <SectionCard title="概念详情"><LoadingState label="加载概念详情…" /></SectionCard>
@@ -341,6 +371,28 @@ function ConceptDetailPanel({ id }: { id: string | null }) {
                       <span className="text-[10px] text-muted-foreground">{e.other.labelZh}</span>
                     </div>
                     {e.note && <div className="pl-4 text-[10px] italic text-muted-foreground">{e.note}</div>}
+                    {e.status === 'PROPOSED' && (
+                      <div className="flex items-center gap-1.5 pl-4 pt-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 gap-1 border-emerald-200 px-2 text-[11px] text-emerald-700 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300"
+                          disabled={reviewing === e.id}
+                          onClick={() => handleReview(e.id, 'CONFIRMED')}
+                        >
+                          <Check className="size-3" /> 确认
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 gap-1 border-rose-200 px-2 text-[11px] text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-300"
+                          disabled={reviewing === e.id}
+                          onClick={() => handleReview(e.id, 'REJECTED')}
+                        >
+                          <X className="size-3" /> 拒绝
+                        </Button>
+                      </div>
+                    )}
                   </li>
                 )
               })}
@@ -439,20 +491,20 @@ function InfoRow({ icon: Icon, label, value }: {
   )
 }
 
-// ============ 聚合视图 ============
+// ============ 合并视图 ============
 function AggregationView() {
   const { data, loading, error, refetch } = useFetch<AggMap>('/aggregation/map')
 
-  if (loading) return <LoadingState label="加载聚合地图…" />
+  if (loading) return <LoadingState label="加载合并视图…" />
   if (error || !data) return <ErrorState message={error || '加载失败'} onRetry={refetch} />
 
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <KpiMini label="总概念数" value={data.totalConcepts} />
-        <KpiMini label="聚合簇数" value={data.totalClusters} accent="emerald" />
+        <KpiMini label="合并组数" value={data.totalClusters} accent="emerald" />
         <KpiMini label="等价关系数" value={data.totalEquivalences} accent="amber" />
-        <KpiMini label="去重率" value={`${((1 - data.totalClusters / Math.max(data.totalConcepts, 1)) * 100).toFixed(0)}%`} accent="rose" />
+        <KpiMini label="合并率" value={`${((1 - data.totalClusters / Math.max(data.totalConcepts, 1)) * 100).toFixed(0)}%`} accent="rose" />
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">

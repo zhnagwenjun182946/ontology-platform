@@ -11,7 +11,8 @@ import { parseDsl } from "@/lib/dsl/parser";
 // }
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { domainId, domain: newDomain, selected, linkToCore } = body;
+  const { domainId, domain: newDomain, selected, linkToCore, buildSource } = body;
+  // buildSource: { materials, domainHint, llmRaw, usage, durationMs } —— 建库来源留存
 
   // 1. 确定领域
   let domain;
@@ -32,6 +33,15 @@ export async function POST(req: NextRequest) {
         icon: newDomain.icon ?? "boxes",
         color: newDomain.color ?? "#10b981",
         status: "ACTIVE",
+        // 留存建库来源
+        rawMaterials: buildSource?.materials ?? null,
+        buildMeta: buildSource ? JSON.stringify({
+          domainHint: buildSource.domainHint ?? null,
+          llmRaw: buildSource.llmRaw ?? null,
+          usage: buildSource.usage ?? null,
+          durationMs: buildSource.durationMs ?? null,
+          builtAt: new Date().toISOString(),
+        }) : null,
       },
     });
     await db.auditLog.create({
@@ -199,10 +209,15 @@ export async function POST(req: NextRequest) {
       entityType: "Domain",
       entityId: domain.id,
       afterJson: JSON.stringify({
-        concepts: concepts.length,
-        relations: relations.length,
-        rules: rules.length,
-        scenarios: scenarios.length,
+        // 完整快照（用户勾选的原始候选，而非仅数量）
+        selected: { concepts, relations, rules, scenarios },
+        counts: {
+          concepts: concepts.length,
+          relations: relations.length,
+          rules: rules.length,
+          scenarios: scenarios.length,
+        },
+        hasBuildSource: !!buildSource,
       }),
     },
   });
@@ -214,6 +229,8 @@ export async function POST(req: NextRequest) {
       _count: { select: { concepts: true, rulesets: true, scenarios: true } },
     },
   });
+
+  console.log(`[Commit] 领域=${domain.code}(${domain.id}) 入库 概念=${concepts.length} 关系=${relations.length} 规则=${rules.length} 场景=${scenarios.length}`);
 
   return NextResponse.json({
     ok: true,

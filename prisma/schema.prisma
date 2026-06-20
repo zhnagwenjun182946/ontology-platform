@@ -14,34 +14,34 @@ datasource db {
 
 /// 核心概念 - 跨领域共享（Person/Organization/Money/Date...）或领域独有
 model Concept {
-  id          String   @id @default(cuid())
-  uri         String   @unique
-  labelZh     String
-  labelEn     String?
-  description String?
+  id            String   @id @default(cuid())
+  uri           String   @unique
+  labelZh       String
+  labelEn       String?
+  description   String?
   /// CLASS | PROPERTY | ENUM
-  type        String   @default("CLASS")
+  type          String   @default("CLASS")
   /// CORE | DOMAIN
-  scope       String   @default("DOMAIN")
+  scope         String   @default("DOMAIN")
   /// DRAFT | PUBLISHED | DEPRECATED
-  status      String   @default("DRAFT")
+  status        String   @default("DRAFT")
   /// 所属领域（null 表示平台核心概念）
   ownerDomainId String?
   /// 字段定义 JSON：[{name, type, required, label, ...}]
-  jsonSchema  String   @default("[]")
-  version     Int      @default(1)
-  createdBy   String   @default("system")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  jsonSchema    String   @default("[]")
+  version       Int      @default(1)
+  createdBy     String   @default("system")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  aliases       ConceptAlias[]
-  equivalencesA ConceptEquivalence[] @relation("ConceptA")
-  equivalencesB ConceptEquivalence[] @relation("ConceptB")
-  domainConcepts DomainConcept[]
-  rulesAsTarget Rule[]
-  ownerDomain   Domain?   @relation("OwnedConcepts", fields: [ownerDomainId], references: [id])
-  relationsAsSource DomainRelation[] @relation("RelationSource")
-  relationsAsTarget DomainRelation[] @relation("RelationTarget")
+  aliases           ConceptAlias[]
+  equivalencesA     ConceptEquivalence[] @relation("ConceptA")
+  equivalencesB     ConceptEquivalence[] @relation("ConceptB")
+  domainConcepts    DomainConcept[]
+  rulesAsTarget     Rule[]
+  ownerDomain       Domain?              @relation("OwnedConcepts", fields: [ownerDomainId], references: [id])
+  relationsAsSource DomainRelation[]     @relation("RelationSource")
+  relationsAsTarget DomainRelation[]     @relation("RelationTarget")
 
   @@index([scope])
   @@index([ownerDomainId])
@@ -91,46 +91,52 @@ model ConceptEquivalence {
 // ========== 领域层 ==========
 
 model Domain {
-  id          String   @id @default(cuid())
-  code        String   @unique
-  nameZh      String
-  nameEn      String?
-  description String?
+  id            String   @id @default(cuid())
+  /// 租户隔离预留（当前默认 "default"，不校验）
+  tenantId      String   @default("default")
+  code          String   @unique
+  nameZh        String
+  nameEn        String?
+  description   String?
   /// ACTIVE | DRAFT | ARCHIVED
-  status      String   @default("ACTIVE")
-  owner       String?
-  icon        String?
-  color       String?
+  status        String   @default("ACTIVE")
+  owner         String?
+  icon          String?
+  color         String?
   activeVersion String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  /// 智能建库时的原始材料原文（用于领域迭代回溯）
+  rawMaterials  String?
+  /// 建库元信息 JSON：{ domainHint, llmRaw, usage, durationMs, builtAt }
+  buildMeta     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  concepts   DomainConcept[]
-  relations  DomainRelation[]
-  rulesets   RuleSet[]
-  scenarios  Scenario[]
-  ownedConcepts Concept[] @relation("OwnedConcepts")
+  concepts      DomainConcept[]
+  relations     DomainRelation[]
+  rulesets      RuleSet[]
+  scenarios     Scenario[]
+  ownedConcepts Concept[]        @relation("OwnedConcepts")
 
   @@index([status])
 }
 
 /// 领域内的概念（可能 link 到核心 Concept）
 model DomainConcept {
-  id             String   @id @default(cuid())
-  domainId       String
-  localName      String
-  localUri       String?
+  id              String   @id @default(cuid())
+  domainId        String
+  localName       String
+  localUri        String?
   /// 如果 link 到 Concept，表示这是核心概念在领域内的具体化
   linkedConceptId String?
-  jsonSchema     String   @default("[]")
+  jsonSchema      String   @default("[]")
   /// DRAFT | PUBLISHED | DEPRECATED
-  status         String   @default("DRAFT")
-  version        Int      @default(1)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  status          String   @default("DRAFT")
+  version         Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  domain   Domain   @relation(fields: [domainId], references: [id], onDelete: Cascade)
-  concept  Concept? @relation(fields: [linkedConceptId], references: [id])
+  domain  Domain   @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  concept Concept? @relation(fields: [linkedConceptId], references: [id])
 
   @@unique([domainId, localName])
   @@index([domainId])
@@ -139,19 +145,19 @@ model DomainConcept {
 
 /// 领域内 / 跨领域概念关系
 model DomainRelation {
-  id               String   @id @default(cuid())
-  domainId         String
-  name             String
+  id                    String   @id @default(cuid())
+  domainId              String
+  name                  String
   sourceDomainConceptId String
   targetDomainConceptId String
   /// CONTAINS | BELONGS_TO | REFERENCES | SUBMIT | APPROVE ...
-  relationType     String
+  relationType          String
   /// 1:1 | 1:N | N:M
-  cardinality      String   @default("1:N")
-  description      String?
-  createdAt        DateTime @default(now())
+  cardinality           String   @default("1:N")
+  description           String?
+  createdAt             DateTime @default(now())
 
-  domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  domain              Domain  @relation(fields: [domainId], references: [id], onDelete: Cascade)
   sourceDomainConcept Concept @relation("RelationSource", fields: [sourceDomainConceptId], references: [id])
   targetDomainConcept Concept @relation("RelationTarget", fields: [targetDomainConceptId], references: [id])
 
@@ -163,17 +169,17 @@ model DomainRelation {
 // ========== 规则层 ==========
 
 model RuleSet {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   domainId    String
   code        String
   name        String
   description String?
-  version     Int      @default(1)
+  version     Int       @default(1)
   /// DRAFT | PUBLISHED
-  status      String   @default("DRAFT")
+  status      String    @default("DRAFT")
   publishedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
   rules  Rule[]
@@ -183,28 +189,28 @@ model RuleSet {
 }
 
 model Rule {
-  id              String   @id @default(cuid())
-  rulesetId       String
-  code            String
-  name            String
+  id               String   @id @default(cuid())
+  rulesetId        String
+  code             String
+  name             String
   /// ERROR | WARNING | INFO
-  severity        String   @default("WARNING")
+  severity         String   @default("WARNING")
   /// 目标概念
-  targetConceptId String?
+  targetConceptId  String?
   /// 作用路径 lines[*] / .field
-  targetPath      String?
+  targetPath       String?
   /// DSL YAML 原文
-  dsl             String
+  dsl              String
   /// 编译产物（SHACL TTL 或 JSON）
   compiledArtifact String?
-  messageTemplate String?
-  explanation     String?
+  messageTemplate  String?
+  explanation      String?
   /// DRAFT | PUBLISHED | DEPRECATED
-  status          String   @default("DRAFT")
-  version         Int      @default(1)
-  tags            String   @default("[]")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  status           String   @default("DRAFT")
+  version          Int      @default(1)
+  tags             String   @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   ruleset       RuleSet    @relation(fields: [rulesetId], references: [id], onDelete: Cascade)
   targetConcept Concept?   @relation(fields: [targetConceptId], references: [id])
@@ -219,14 +225,14 @@ model Rule {
 
 /// 规则黄金样本
 model RuleTest {
-  id            String   @id @default(cuid())
-  ruleId        String
-  name          String
-  sampleInput   String   @default("{}")
+  id              String   @id @default(cuid())
+  ruleId          String
+  name            String
+  sampleInput     String   @default("{}")
   /// PASS | FAIL
-  expectedResult String  @default("FAIL")
+  expectedResult  String   @default("FAIL")
   expectedMessage String?
-  createdAt     DateTime @default(now())
+  createdAt       DateTime @default(now())
 
   rule Rule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
 
@@ -236,20 +242,20 @@ model RuleTest {
 // ========== 场景与运行层 ==========
 
 model Scenario {
-  id            String   @id @default(cuid())
-  domainId      String
-  code          String
-  name          String
-  description   String?
-  inputSchema   String   @default("{}")
-  rulesetIds    String   @default("[]")
+  id             String   @id @default(cuid())
+  domainId       String
+  code           String
+  name           String
+  description    String?
+  inputSchema    String   @default("{}")
+  rulesetIds     String   @default("[]")
   promptTemplate String?
-  uiSchema      String   @default("{}")
-  status        String   @default("ACTIVE")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  uiSchema       String   @default("{}")
+  status         String   @default("ACTIVE")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  domain Domain      @relation(fields: [domainId], references: [id], onDelete: Cascade)
   runs   RunRecord[]
 
   @@unique([domainId, code])
@@ -257,19 +263,25 @@ model Scenario {
 }
 
 model RunRecord {
-  id            String   @id @default(cuid())
-  scenarioId    String
-  domainVersion String?
-  inputDocuments String  @default("[]")
+  id             String    @id @default(cuid())
+  /// 租户隔离预留（当前默认 "default"，不校验）
+  tenantId       String    @default("default")
+  scenarioId     String
+  domainVersion  String?
+  inputDocuments String    @default("[]")
+  /// LLM 抽取的完整结构化结果（JSON 字符串）
+  extractionJson String?
+  /// LLM 调用元信息 JSON：{ ok, error, usage, durationMs, raw }
+  extractionMeta String?
   /// PENDING | RUNNING | SUCCESS | FAILED
-  status        String   @default("PENDING")
-  error         String?
-  summary       String?
-  startedAt     DateTime @default(now())
-  finishedAt    DateTime?
+  status         String    @default("PENDING")
+  error          String?
+  summary        String?
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
 
-  scenario Scenario         @relation(fields: [scenarioId], references: [id])
-  findings Finding[]
+  scenario  Scenario          @relation(fields: [scenarioId], references: [id])
+  findings  Finding[]
   extracted ExtractedObject[]
 
   @@index([scenarioId])
@@ -277,12 +289,12 @@ model RunRecord {
 }
 
 model ExtractedObject {
-  id          String   @id @default(cuid())
-  runId       String
-  conceptId   String?
+  id           String   @id @default(cuid())
+  runId        String
+  conceptId    String?
   conceptLabel String?
-  jsonPayload String   @default("{}")
-  createdAt   DateTime @default(now())
+  jsonPayload  String   @default("{}")
+  createdAt    DateTime @default(now())
 
   run RunRecord @relation(fields: [runId], references: [id], onDelete: Cascade)
 
@@ -327,4 +339,53 @@ model AuditLog {
 model Counter {
   id    String @id
   value Int    @default(0)
+}
+
+// ========== 租户 / 用户 / API Key（预留，当前不校验） ==========
+
+/// 租户 - 多租户隔离预留（当前全局默认租户，不做校验）
+model Tenant {
+  id        String   @id @default(cuid())
+  code      String   @unique @default("default")
+  name      String   @default("默认租户")
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+
+  users   User[]
+  apiKeys ApiKey[]
+}
+
+/// 用户 - 预留（当前默认管理员，登录预填）
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String   @default("default")
+  username     String   @unique @default("admin")
+  passwordHash String   @default("admin")
+  displayName  String   @default("管理员")
+  role         String   @default("ADMIN")
+  status       String   @default("ACTIVE")
+  createdAt    DateTime @default(now())
+
+  tenant  Tenant?  @relation(fields: [tenantId], references: [code])
+  apiKeys ApiKey[]
+
+  @@index([tenantId])
+}
+
+/// API Key - 上游 Agent 调用鉴权（预留，当前默认 key）
+model ApiKey {
+  id         String    @id @default(cuid())
+  tenantId   String    @default("default")
+  key        String    @unique @default("ontology-platform-default-key")
+  name       String    @default("默认 API Key")
+  userId     String?
+  status     String    @default("ACTIVE")
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [code])
+  user   User?   @relation(fields: [userId], references: [id])
+
+  @@index([tenantId])
+  @@index([key])
 }

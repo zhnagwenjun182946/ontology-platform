@@ -1,13 +1,14 @@
 'use client'
 
 import * as React from 'react'
-import { History, RefreshCw, ChevronRight, Clock, ListChecks, Boxes } from 'lucide-react'
+import { History, RefreshCw, ChevronRight, Clock, ListChecks, Boxes, FileText, ClipboardCopy } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
-} from '@/components/ui/sheet'
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from '@/components/ui/dialog'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
@@ -20,6 +21,9 @@ import {
   LoadingState, ErrorState, EmptyState, PageHeader, SectionCard,
   SeverityBadge, StatusBadge,
 } from './primitives'
+import { InstanceGraph, type InstanceExtracted, type InstanceFinding } from './InstanceGraph'
+import { generateRunReport } from './runReport'
+import { Pagination } from './Pagination'
 
 interface RunListItem {
   id: string
@@ -34,6 +38,9 @@ interface RunListItem {
 interface RunDetail extends RunListItem {
   error?: string | null
   domainVersion?: string | null
+  inputDocuments?: string
+  extractionJson?: string | null
+  extractionMeta?: string | null
   findings: Array<{
     id: string
     severity: string
@@ -60,6 +67,7 @@ const STATUS_FILTER: Array<{ key: string; label: string }> = [
 export function RunHistory() {
   const [statusFilter, setStatusFilter] = React.useState('all')
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
+  const [page, setPage] = React.useState(1)
   const { data, loading, error, refetch } = useFetch<RunListItem[]>('/runs?limit=50')
 
   const filtered = React.useMemo(() => {
@@ -68,12 +76,19 @@ export function RunHistory() {
     return data.filter(r => r.status === statusFilter)
   }, [data, statusFilter])
 
+  // 前端分页
+  const pageSize = 15
+  const totalPages = Math.ceil(filtered.length / pageSize)
+  const currentPage = Math.min(page, totalPages || 1)
+  const paged = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  React.useEffect(() => { setPage(1) }, [statusFilter])
+
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
         title="运行记录"
         icon={History}
-        description="所有场景执行的历史快照，点击查看完整 Findings 与抽取对象。"
+        description="所有场景执行的历史记录，点击查看检查结果和提取的数据。"
         actions={
           <Button size="sm" variant="outline" onClick={refetch}>
             <RefreshCw className="size-3.5" /> 刷新
@@ -102,6 +117,7 @@ export function RunHistory() {
         ) : filtered.length === 0 ? (
           <EmptyState title="无运行记录" hint="前往场景试运行跑一次" icon={Clock} />
         ) : (
+          <>
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
@@ -109,7 +125,7 @@ export function RunHistory() {
                   <TableHead className="text-xs">场景</TableHead>
                   <TableHead className="text-xs">领域</TableHead>
                   <TableHead className="text-xs">状态</TableHead>
-                  <TableHead className="text-xs text-center">Findings</TableHead>
+                  <TableHead className="text-xs text-center">检查结果</TableHead>
                   <TableHead className="text-xs text-center">抽取</TableHead>
                   <TableHead className="text-xs">开始时间</TableHead>
                   <TableHead className="text-xs text-right">耗时</TableHead>
@@ -117,7 +133,7 @@ export function RunHistory() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map(r => {
+                {paged.map(r => {
                   const dom = r.scenario?.domain
                   const c = domainColor(dom?.code)
                   return (
@@ -154,6 +170,8 @@ export function RunHistory() {
               </TableBody>
             </Table>
           </div>
+          <Pagination total={filtered.length} page={currentPage} pageSize={pageSize} onChange={setPage} />
+          </>
         )}
       </SectionCard>
 
@@ -192,19 +210,20 @@ function RunDetailDrawer({ id, onClose }: { id: string | null; onClose: () => vo
   }, [id])
 
   return (
-    <Sheet open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-lg scrollbar-thin">
-        <SheetHeader className="px-4 pt-4">
-          <SheetTitle className="flex items-center gap-2 text-base">
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="flex h-[92vh] w-[96vw] !max-w-[96vw] !p-0 flex-col gap-0 overflow-hidden">
+        <DialogHeader className="shrink-0 border-b px-6 py-3">
+          <DialogTitle className="flex items-center gap-2 text-base">
             {detail?.scenario?.name ?? '运行详情'}
             {detail && <StatusBadge status={detail.status} />}
-          </SheetTitle>
-          <SheetDescription>
+          </DialogTitle>
+          <DialogDescription>
             运行 ID <code className="font-mono text-[10px]">{id}</code>
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="flex flex-col gap-3 p-4">
+        <div className="flex-1 overflow-y-auto p-6 scrollbar-thin">
+        <div className="flex flex-col gap-3">
           {loading ? (
             <LoadingState label="加载运行详情…" />
           ) : error ? (
@@ -213,7 +232,7 @@ function RunDetailDrawer({ id, onClose }: { id: string | null; onClose: () => vo
             <>
               {/* 摘要 */}
               <div className="grid grid-cols-2 gap-2">
-                <MiniStat icon={ListChecks} label="Findings" value={detail.findings.length} accent={detail.findings.length > 0 ? 'rose' : 'emerald'} />
+                <MiniStat icon={ListChecks} label="检查结果" value={detail.findings.length} accent={detail.findings.length > 0 ? 'rose' : 'emerald'} />
                 <MiniStat icon={Boxes} label="抽取对象" value={detail.extracted.length} accent="slate" />
               </div>
               {detail.summary && (
@@ -241,13 +260,16 @@ function RunDetailDrawer({ id, onClose }: { id: string | null; onClose: () => vo
               )}
 
               <Tabs defaultValue="findings">
-                <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="findings" className="text-xs">Findings ({detail.findings.length})</TabsTrigger>
+                <TabsList className="grid w-full grid-cols-5">
+                  <TabsTrigger value="findings" className="text-xs">检查结果 ({detail.findings.length})</TabsTrigger>
+                  <TabsTrigger value="graph" className="text-xs">关系图</TabsTrigger>
+                  <TabsTrigger value="report" className="text-xs">运行报告</TabsTrigger>
                   <TabsTrigger value="extracted" className="text-xs">抽取对象 ({detail.extracted.length})</TabsTrigger>
+                  <TabsTrigger value="raw" className="text-xs">原始数据</TabsTrigger>
                 </TabsList>
                 <TabsContent value="findings" className="mt-2">
                   {detail.findings.length === 0 ? (
-                    <EmptyState title="无 Findings" hint="所有规则均通过" icon={ListChecks} />
+                    <EmptyState title="无检查结果" hint="所有规则均通过" icon={ListChecks} />
                   ) : (
                     <ul className="flex flex-col gap-1.5">
                       {[...detail.findings]
@@ -280,6 +302,77 @@ function RunDetailDrawer({ id, onClose }: { id: string | null; onClose: () => vo
                     </ul>
                   )}
                 </TabsContent>
+                <TabsContent value="graph" className="mt-2">
+                  {detail.extracted.length === 0 ? (
+                    <EmptyState title="无抽取对象" hint="无可可视化的实体" icon={Boxes} />
+                  ) : (
+                    <InstanceGraph
+                      extracted={detail.extracted.map((e): InstanceExtracted => ({
+                        id: e.id,
+                        conceptLabel: e.conceptLabel,
+                        jsonPayload: (() => {
+                          try { return typeof e.jsonPayload === 'string' ? JSON.parse(e.jsonPayload) : e.jsonPayload } catch { return {} }
+                        })(),
+                      }))}
+                      findings={detail.findings.map((f): InstanceFinding => ({
+                        id: f.id,
+                        ruleCode: f.ruleCode ?? f.rule?.code ?? null,
+                        severity: f.severity,
+                        targetPath: f.targetPath,
+                        message: f.message,
+                        contextJson: f.contextJson,
+                      }))}
+                      domainCode={detail.scenario?.domain?.code}
+                      height="full"
+                    />
+                  )}
+                </TabsContent>
+                <TabsContent value="report" className="mt-2">
+                  {(() => {
+                    const report = generateRunReport({
+                      id: detail.id,
+                      status: detail.status,
+                      summary: detail.summary,
+                      startedAt: detail.startedAt,
+                      finishedAt: detail.finishedAt,
+                      error: detail.error,
+                      inputDocuments: detail.inputDocuments,
+                      extractionMeta: detail.extractionMeta,
+                      scenario: detail.scenario,
+                      findings: detail.findings.map(f => ({
+                        ruleCode: f.ruleCode ?? f.rule?.code ?? null,
+                        severity: f.severity,
+                        targetPath: f.targetPath,
+                        message: f.message,
+                        contextJson: f.contextJson,
+                        rule: f.rule ? { code: f.rule.code, name: f.rule.name, severity: f.rule.severity } : null,
+                      })),
+                      extracted: detail.extracted.map(e => ({
+                        id: e.id,
+                        conceptLabel: e.conceptLabel,
+                        jsonPayload: (() => { try { return typeof e.jsonPayload === 'string' ? JSON.parse(e.jsonPayload) : e.jsonPayload } catch { return {} } })(),
+                      })),
+                    })
+                    return (
+                      <div className="relative">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="absolute right-2 top-2 z-10 h-7 gap-1 text-[11px]"
+                          onClick={() => {
+                            navigator.clipboard.writeText(report)
+                            toast.success('报告已复制到剪贴板')
+                          }}
+                        >
+                          <ClipboardCopy className="size-3" /> 复制
+                        </Button>
+                        <pre className="max-h-[500px] overflow-auto rounded-md bg-muted/40 p-3 font-mono text-[11px] leading-relaxed text-foreground scrollbar-thin">
+                          <code>{report}</code>
+                        </pre>
+                      </div>
+                    )
+                  })()}
+                </TabsContent>
                 <TabsContent value="extracted" className="mt-2">
                   {detail.extracted.length === 0 ? (
                     <EmptyState title="无抽取对象" icon={Boxes} />
@@ -301,12 +394,57 @@ function RunDetailDrawer({ id, onClose }: { id: string | null; onClose: () => vo
                     </ul>
                   )}
                 </TabsContent>
+                <TabsContent value="raw" className="mt-2">
+                  <div className="flex flex-col gap-3 text-xs">
+                    {/* AI 处理信息 */}
+                    {detail.extractionMeta && (() => {
+                      const meta = (() => { try { return JSON.parse(detail.extractionMeta!) } catch { return null } })()
+                      if (!meta) return null
+                      return (
+                        <div className="rounded-md border bg-card p-2.5">
+                          <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">AI 处理信息</div>
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                            <div><span className="text-muted-foreground">状态：</span>{meta.ok ? '成功' : '失败'}</div>
+                            <div><span className="text-muted-foreground">耗时：</span>{meta.durationMs ?? '-'}ms</div>
+                            {meta.usage && <div><span className="text-muted-foreground">输入字数：</span>{meta.usage.prompt_tokens ?? '-'}</div>}
+                            {meta.usage && <div><span className="text-muted-foreground">输出字数：</span>{meta.usage.completion_tokens ?? '-'}</div>}
+                          </div>
+                        </div>
+                      )
+                    })()}
+
+                    {/* 输入材料原文 */}
+                    {detail.inputDocuments && detail.inputDocuments !== '[]' && (
+                      <div className="rounded-md border bg-card p-2.5">
+                        <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">输入材料原文</div>
+                        <pre className="max-h-60 overflow-auto rounded bg-muted/40 p-2 font-mono text-[10px] text-foreground scrollbar-thin">
+                          <code>{(() => { try { return JSON.parse(detail.inputDocuments!).join('\n\n') } catch { return detail.inputDocuments } })()}</code>
+                        </pre>
+                      </div>
+                    )}
+
+                    {/* AI 抽取完整结果 */}
+                    {detail.extractionJson && (
+                      <div className="rounded-md border bg-card p-2.5">
+                        <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">AI 抽取完整结果</div>
+                        <pre className="max-h-80 overflow-auto rounded bg-muted/40 p-2 font-mono text-[10px] text-foreground scrollbar-thin">
+                          <code>{prettyJson(detail.extractionJson)}</code>
+                        </pre>
+                      </div>
+                    )}
+
+                    {!detail.extractionJson && !detail.inputDocuments && (
+                      <EmptyState title="无原始数据" hint="本次运行为结构化模式或未保存" icon={FileText} />
+                    )}
+                  </div>
+                </TabsContent>
               </Tabs>
             </>
           )}
         </div>
-      </SheetContent>
-    </Sheet>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -16,7 +16,7 @@ export async function GET(_req: NextRequest) {
     db.concept.count({ where: { scope: "CORE" } }),
     db.conceptEquivalence.count(),
     db.conceptEquivalence.count({ where: { status: "PROPOSED" } }),
-    db.runRecord.findMany({ take: 5, orderBy: { startedAt: "desc" }, include: { scenario: true } }),
+    db.runRecord.findMany({ take: 5, orderBy: { startedAt: "desc" }, include: { scenario: { include: { domain: true } } } }),
     db.finding.groupBy({ by: ["severity"], _count: true }),
     db.rule.groupBy({ by: ["severity"], _count: true }),
     db.domain.findMany({ include: { _count: { select: { concepts: true, rulesets: true } } } }),

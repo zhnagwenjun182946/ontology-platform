@@ -57,7 +57,13 @@ export async function chat(
 
   const json = await res.json();
   const text = json.choices?.[0]?.message?.content ?? "";
-  return { text, usage: json.usage, durationMs };
+  const u = json.usage;
+  // 业务日志：记录 LLM 调用耗时、token 消耗（含 reasoning_tokens 诊断）
+  const reasonTok = u?.completion_tokens_details?.reasoning_tokens ?? 0;
+  console.log(
+    `[LLM] ${MODEL} ${durationMs}ms | prompt=${u?.prompt_tokens ?? '-'} completion=${u?.completion_tokens ?? '-'} (reasoning=${reasonTok}) | contentLen=${text.length}${text.length === 0 ? ' ⚠️空内容' : ''}`,
+  );
+  return { text, usage: u, durationMs };
 }
 
 /**

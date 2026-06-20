@@ -123,7 +123,7 @@ export function AutoBuildWizard({ onNavigateToRun, onNavigateToConcepts }: {
         { method: 'POST', json: { materials, domainHint } },
       )
       if (!r.ok || !r.result) {
-        toast.error('LLM 分析失败', { description: r.error })
+        toast.error('AI 分析失败', { description: r.error })
         return
       }
       setResult(r.result)
@@ -167,6 +167,16 @@ export function AutoBuildWizard({ onNavigateToRun, onNavigateToConcepts }: {
           rules: Array.from(selected.rules).map(i => result.rules[Number(i)]),
           scenarios: Array.from(selected.scenarios).map(i => result.scenarios[Number(i)]),
         },
+        // 回传建库来源，供 commit 留存到 Domain.rawMaterials / buildMeta
+        buildSource: {
+          materials,
+          domainHint: domainMode === 'new'
+            ? { code: newDomain.code, name: newDomain.nameZh, description: newDomain.description }
+            : undefined,
+          llmRaw: result.raw,
+          usage: extractionMeta?.usage,
+          durationMs: extractionMeta?.durationMs,
+        },
       }
       const r = await api<{ ok: boolean; domain: Domain; created: any; error?: string }>(
         '/autobuild/commit',
@@ -202,7 +212,7 @@ export function AutoBuildWizard({ onNavigateToRun, onNavigateToConcepts }: {
       <PageHeader
         title="智能建库"
         icon={Wand2}
-        description="粘公司业务材料 → DeepSeek 自动抽取概念/关系/规则 → 人工审核 → 一键入库 → 试运行"
+        description="上传业务材料 → AI 自动识别概念和规则 → 人工确认 → 入库 → 试运行"
         actions={
           step !== 1 && (
             <Button size="sm" variant="ghost" onClick={reset}>
@@ -430,12 +440,12 @@ function Step2Materials({ materials, setMaterials, onBack, onAnalyze, analyzing 
             业务材料
           </span>
         }
-        description="粘贴公司制度文档、流程说明、业务规则等原文。LLM 会从中抽取概念、关系和规则"
+        description="粘贴公司制度文档、流程说明、业务规则等原文。AI 会从中抽取概念、关系和规则"
       >
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
             <Brain className="size-3.5" />
-            将调用 DeepSeek v4-pro，请尽量提供结构化文本（编号、字段、规则条件等）
+            请尽量提供清晰的文本（编号、字段、规则条件等）
           </div>
           <Textarea
             value={materials}
@@ -457,7 +467,7 @@ function Step2Materials({ materials, setMaterials, onBack, onAnalyze, analyzing 
         </Button>
         <Button onClick={onAnalyze} disabled={analyzing || !materials.trim()}>
           {analyzing ? <RefreshCw className="size-3.5 animate-spin" /> : <Brain className="size-3.5" />}
-          {analyzing ? 'LLM 分析中…' : '开始分析'}
+          {analyzing ? 'AI 分析中…' : '开始分析'}
         </Button>
       </div>
     </div>
@@ -491,10 +501,10 @@ function Step3Review({ result, selected, setSelected, extractionMeta, onBack, on
           title={
             <span className="flex items-center gap-2">
               <Brain className="size-4 text-emerald-500" />
-              DeepSeek 抽取结果
+              AI 抽取结果
             </span>
           }
-          description="LLM 从材料中识别出的候选本体，请勾选要入库的内容"
+          description="AI 从材料中识别出的候选概念和规则，请勾选要入库的内容"
         >
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <MetaBox icon={Boxes} label="概念" value={result.concepts.length} selected={selected.concepts.size} accent="emerald" />
@@ -508,7 +518,7 @@ function Step3Review({ result, selected, setSelected, extractionMeta, onBack, on
             </span>
             {extractionMeta.usage && (
               <span className="flex items-center gap-1">
-                <Zap className="size-3" /> tokens: {extractionMeta.usage.total_tokens ?? '-'}
+                <Zap className="size-3" /> 字数: {extractionMeta.usage.total_tokens ?? '-'}
               </span>
             )}
           </div>
@@ -618,7 +628,7 @@ function Step3Review({ result, selected, setSelected, extractionMeta, onBack, on
                       {r.message && <p className="text-xs text-amber-700 dark:text-amber-300">提示：{r.message}</p>}
                       {r.explanation && <p className="text-[11px] text-muted-foreground">{r.explanation}</p>}
                       <details className="mt-1">
-                        <summary className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground">查看 DSL</summary>
+                        <summary className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground">查看规则配置</summary>
                         <pre className="mt-1 overflow-x-auto rounded bg-slate-50 p-2 font-mono text-[10px] text-slate-700 dark:bg-slate-900/60 dark:text-slate-300 scrollbar-thin">
                           <code>{r.dsl}</code>
                         </pre>

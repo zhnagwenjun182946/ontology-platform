@@ -15,20 +15,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "企业级本体平台 · Ontology Console",
-  description:
-    "在线治理的语义资产平台：在线编辑、版本快照、跨领域去重聚合、人能看懂的规则 DSL。",
-  keywords: [
-    "Ontology",
-    "本体平台",
-    "Rule DSL",
-    "SHACL",
-    "知识图谱",
-    "企业治理",
-  ],
+  title: "智规平台",
+  description: "业务规则智能校验平台",
+  keywords: ["规则校验", "智能校验", "业务规则"],
   authors: [{ name: "Platform Team" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/favicon.svg",
   },
 };
 

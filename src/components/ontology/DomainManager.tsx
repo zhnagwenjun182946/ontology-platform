@@ -237,7 +237,7 @@ function DomainEditDialog({ domain, onClose, onSaved }: {
 
   const handleSubmit = async () => {
     if (!code || !nameZh) {
-      toast.error('code 和中文名必填')
+      toast.error('英文标识和中文名必填')
       return
     }
     setSaving(true)

@@ -23,6 +23,8 @@ import {
   LoadingState, ErrorState, EmptyState, PageHeader, SectionCard,
   SeverityBadge, StatusBadge,
 } from './primitives'
+import { InstanceGraph } from './InstanceGraph'
+import { generateRunReport } from './runReport'
 
 interface Scenario {
   id: string
@@ -156,7 +158,7 @@ export function ScenarioRun({ onJumpToRuns }: { onJumpToRuns: () => void }) {
         setResult(r)
         setStep(3)
         toast.success('运行完成', {
-          description: `${r.findings.length} 条 Findings · ${r.extractedCount} 个抽取对象`,
+          description: `${r.findings.length} 条检查结果 · ${r.extractedCount} 个抽取对象`,
         })
       } catch (e: any) {
         toast.error('运行失败', { description: e.message })
@@ -176,12 +178,12 @@ export function ScenarioRun({ onJumpToRuns }: { onJumpToRuns: () => void }) {
           json: { scenarioId, mode: 'text', text },
         })
         if (r.extraction && !r.extraction.ok) {
-          toast.error('LLM 抽取失败', { description: r.extraction.error })
+          toast.error('AI 抽取失败', { description: r.extraction.error })
         } else {
           setResult(r)
           setStep(3)
           toast.success('运行完成', {
-            description: `抽取 ${r.extraction?.durationMs ?? 0}ms · ${r.findings.length} 条 Findings`,
+            description: `抽取 ${r.extraction?.durationMs ?? 0}ms · ${r.findings.length} 条检查结果`,
           })
         }
       } catch (e: any) {
@@ -205,7 +207,7 @@ export function ScenarioRun({ onJumpToRuns }: { onJumpToRuns: () => void }) {
       <PageHeader
         title="场景试运行"
         icon={PlayCircle}
-        description="选择场景 → 填写材料 → 一键运行。支持 JSON 直传和文本 LLM 抽取两种模式。"
+        description="选择场景 → 填写材料 → 一键运行。支持 JSON 直传和文本 AI 抽取两种模式。"
         actions={
           (step !== 1 || result) && (
             <Button size="sm" variant="ghost" onClick={handleReset}>
@@ -223,7 +225,6 @@ export function ScenarioRun({ onJumpToRuns }: { onJumpToRuns: () => void }) {
           loading={loading}
           error={error}
           refetch={refetch}
-          selectedId={scenarioId}
           onSelect={(id) => {
             setScenarioId(id)
             const sc = data?.find(s => s.id === id)
@@ -232,8 +233,8 @@ export function ScenarioRun({ onJumpToRuns }: { onJumpToRuns: () => void }) {
               setText(proc ? PROC_EXAMPLE_TEXT : REIMBURSEMENT_EXAMPLE_TEXT)
               setPayload(proc ? PROC_EXAMPLE_JSON : REIMBURSEMENT_EXAMPLE_JSON)
             }
+            setStep(2)
           }}
-          onNext={() => setStep(2)}
         />
       )}
 
@@ -285,67 +286,58 @@ function StepIndicator({ step }: { step: 1 | 2 | 3 }) {
 }
 
 function ScenarioPicker({
-  scenarios, loading, error, refetch, selectedId, onSelect, onNext,
+  scenarios, loading, error, refetch, onSelect,
 }: {
   scenarios?: Scenario[]
   loading: boolean
   error: string | null
   refetch: () => void
-  selectedId: string | null
   onSelect: (id: string) => void
-  onNext: () => void
 }) {
   if (loading) return <LoadingState label="加载场景…" />
   if (error) return <ErrorState message={error} onRetry={refetch} />
   if (!scenarios || scenarios.length === 0) return <EmptyState title="无可用场景" />
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {scenarios.map(s => {
-          const dc = domainColor(s.domain.code)
-          const active = s.id === selectedId
-          return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => onSelect(s.id)}
-              className={cn(
-                'group flex flex-col gap-2 rounded-xl border bg-card p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-md',
-                active ? 'border-primary ring-2 ring-primary/20' : 'border-border'
+    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+      {scenarios.map(s => {
+        const dc = domainColor(s.domain.code)
+        return (
+          <div
+            key={s.id}
+            className="group flex flex-col gap-2 rounded-xl border bg-card p-4 transition-all hover:-translate-y-0.5 hover:shadow-md"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className={cn('size-2.5 rounded-full', dc.dot)} />
+                <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', dc.bg, dc.text)}>
+                  {s.domain.nameZh}
+                </span>
+              </div>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-sm font-semibold text-foreground">{s.name}</span>
+              <code className="font-mono text-[10px] text-muted-foreground">{s.code}</code>
+            </div>
+            <p className="text-xs text-muted-foreground line-clamp-2">
+              {s.description || '无描述'}
+            </p>
+            <div className="flex items-center gap-2 border-t pt-2 text-[10px] text-muted-foreground">
+              <span>历史运行 {s._count.runs}</span>
+              {s.rulesetIds && (
+                <span>· {JSON.parse(s.rulesetIds).length} 规则集</span>
               )}
+            </div>
+            <Button
+              size="sm"
+              className="mt-1 w-full"
+              onClick={() => onSelect(s.id)}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className={cn('size-2.5 rounded-full', dc.dot)} />
-                  <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', dc.bg, dc.text)}>
-                    {s.domain.nameZh}
-                  </span>
-                </div>
-                {active && <CheckCircle2 className="size-4 text-primary" />}
-              </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-semibold text-foreground">{s.name}</span>
-                <code className="font-mono text-[10px] text-muted-foreground">{s.code}</code>
-              </div>
-              <p className="text-xs text-muted-foreground line-clamp-2">
-                {s.description || '无描述'}
-              </p>
-              <div className="flex items-center gap-2 border-t pt-2 text-[10px] text-muted-foreground">
-                <span>历史运行 {s._count.runs}</span>
-                {s.rulesetIds && (
-                  <span>· {JSON.parse(s.rulesetIds).length} 规则集</span>
-                )}
-              </div>
-            </button>
-          )
-        })}
-      </div>
-      <div className="flex justify-end">
-        <Button onClick={onNext} disabled={!selectedId}>
-          下一步：填写材料 <ArrowRight className="size-3.5" />
-        </Button>
-      </div>
+              <PlayCircle className="size-3.5" /> 试运行
+            </Button>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -389,7 +381,7 @@ function PayloadEditor({
 
       <SectionCard
         title="输入材料"
-        description="文本模式：DeepSeek 抽取结构化对象 → 规则校验；JSON 模式：直接传结构化对象"
+        description="文本模式：AI 自动识别并提取数据后校验；结构化模式：直接输入数据"
         action={
           <Button size="sm" variant="ghost" onClick={onLoadExample}>
             <ClipboardCopy className="size-3.5" /> 加载示例
@@ -401,8 +393,8 @@ function PayloadEditor({
             <TabsTrigger value="text" className="gap-1.5">
               <FileText className="size-3.5" />
               <span>文本模式</span>
-              <Badge variant="outline" className="ml-1 border-0 bg-emerald-100 px-1 py-0 text-[9px] text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                <Brain className="size-2.5" /> LLM
+              <Badge variant="outline" className="ml-1 border-0 bg-muted px-1 py-0 text-[9px] text-muted-foreground">
+                <Brain className="size-2.5" /> AI
               </Badge>
             </TabsTrigger>
             <TabsTrigger value="json" className="gap-1.5">
@@ -415,7 +407,7 @@ function PayloadEditor({
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Brain className="size-3.5 text-emerald-500" />
-                业务材料原文（将调用 DeepSeek v4-pro 抽取为结构化对象）
+                业务材料原文（AI 会自动提取关键信息）
               </div>
               <Textarea
                 value={text}
@@ -427,7 +419,7 @@ function PayloadEditor({
               />
               <div className="flex items-center gap-2 rounded-md bg-emerald-50 px-2.5 py-1.5 text-[11px] text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
                 <Zap className="size-3" />
-                平台会按领域 schema 把文本抽取为 JSON，再跑规则集；token 消耗和耗时见结果页
+                平台会自动从文本中提取数据并执行规则校验，处理耗时见结果页
               </div>
             </div>
           </TabsContent>
@@ -436,14 +428,14 @@ function PayloadEditor({
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <FileJson className="size-3.5" />
-                payload (JSON，作为 ctx 传给规则引擎)
+                结构化数据（直接用于规则校验）
               </div>
               <Textarea
                 value={payload}
                 onChange={(e) => onPayloadChange(e.target.value)}
                 className="min-h-[420px] resize-y bg-slate-50 font-mono text-xs leading-relaxed dark:bg-slate-900/50 scrollbar-thin"
                 spellCheck={false}
-                aria-label="输入材料 JSON"
+                aria-label="输入结构化数据"
               />
             </div>
           </TabsContent>
@@ -481,27 +473,47 @@ function RunResult({ result, onJumpToRuns, onReset }: {
       {/* 摘要 */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <SummaryCard icon={ListChecks} label="执行规则" value={result.ruleCount} accent="slate" />
-        <SummaryCard icon={AlertCircle} label="Findings" value={result.findings.length} accent={errorCount > 0 ? 'rose' : 'emerald'} />
+        <SummaryCard icon={AlertCircle} label="检查结果" value={result.findings.length} accent={errorCount > 0 ? 'rose' : 'emerald'} />
         <SummaryCard icon={Boxes} label="抽取对象" value={result.extractedCount} accent="emerald" />
         <SummaryCard icon={CheckCircle2} label="状态" value={result.status} accent={result.status === 'SUCCESS' ? 'emerald' : 'rose'} />
       </div>
 
-      {/* LLM 抽取元信息（仅文本模式） */}
+      {/* 抽取实例关系图 */}
+      {result.extracted && result.extracted.length > 0 && (
+        <SectionCard
+          title={
+            <span className="flex items-center gap-2">
+              <Boxes className="size-4 text-emerald-500" />
+              抽取实例关系图
+            </span>
+          }
+          description="本次运行抽取的事实实体及其关联关系。红色节点表示命中违规规则，点击查看详情。"
+        >
+          <InstanceGraph
+            extracted={result.extracted}
+            findings={result.findings}
+            domainCode={result.scenario?.domain?.code}
+            height="full"
+          />
+        </SectionCard>
+      )}
+
+      {/* AI 抽取元信息（仅文本模式） */}
       {result.extraction && (
         <SectionCard
           title={
             <span className="flex items-center gap-2">
               <Brain className="size-4 text-emerald-500" />
-              DeepSeek LLM 抽取
+              AI AI 抽取
             </span>
           }
-          description="从业务文本抽取结构化对象的过程元信息"
+          description="从业务文本提取数据的过程信息"
         >
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <MetaItem icon={CheckCircle2} label="状态" value={result.extraction.ok ? '成功' : '失败'} accent={result.extraction.ok ? 'emerald' : 'rose'} />
             <MetaItem icon={Clock} label="耗时" value={`${result.extraction.durationMs ?? 0} ms`} accent="slate" />
-            <MetaItem icon={Zap} label="Prompt Tokens" value={result.extraction.usage?.prompt_tokens ?? '-'} accent="slate" />
-            <MetaItem icon={Zap} label="Completion Tokens" value={result.extraction.usage?.completion_tokens ?? '-'} accent="slate" />
+            <MetaItem icon={Zap} label="输入字数" value={result.extraction.usage?.prompt_tokens ?? '-'} accent="slate" />
+            <MetaItem icon={Zap} label="输出字数" value={result.extraction.usage?.completion_tokens ?? '-'} accent="slate" />
           </div>
         </SectionCard>
       )}
@@ -519,8 +531,8 @@ function RunResult({ result, onJumpToRuns, onReset }: {
       {/* 抽取出的对象（仅文本模式才有） */}
       {result.extracted && result.extracted.length > 0 && (
         <SectionCard
-          title="LLM 抽取的结构化对象"
-          description={`${result.extracted.length} 个对象，将作为规则引擎的 ctx`}
+          title="AI 提取的数据"
+          description={`${result.extracted.length} 个数据对象，用于规则校验`}
         >
           <ul className="flex flex-col gap-2">
             {result.extracted.map((o, i) => (
@@ -542,9 +554,57 @@ function RunResult({ result, onJumpToRuns, onReset }: {
         </SectionCard>
       )}
 
-      {/* Findings */}
+      {/* 运行报告 */}
+      {(() => {
+        const report = generateRunReport({
+          id: result.id,
+          status: result.status,
+          summary: result.summary,
+          startedAt: result.startedAt,
+          finishedAt: result.finishedAt,
+          error: null,
+          extractionMeta: result.extraction ? JSON.stringify({
+            ok: result.extraction.ok,
+            usage: result.extraction.usage,
+            durationMs: result.extraction.durationMs,
+          }) : null,
+          scenario: result.scenario,
+          findings: result.findings,
+          extracted: result.extracted ?? [],
+        })
+        return (
+          <SectionCard
+            title={
+              <span className="flex items-center gap-2">
+                <FileText className="size-4 text-primary" />
+                运行报告
+              </span>
+            }
+            description="基于运行结果自动生成的报告，可复制分享"
+          >
+            <div className="relative">
+              <Button
+                size="sm"
+                variant="outline"
+                className="absolute right-2 top-2 h-7 gap-1 text-[11px]"
+                onClick={() => {
+                  navigator.clipboard.writeText(report)
+                  toast.success('报告已复制到剪贴板')
+                }}
+              >
+                <ClipboardCopy className="size-3" /> 复制
+              </Button>
+              <pre className="max-h-[500px] overflow-auto rounded bg-muted/40 p-3 font-mono text-[11px] leading-relaxed text-foreground scrollbar-thin">
+                <code>{report}</code>
+              </pre>
+            </div>
+          </SectionCard>
+        )
+      })()}
+
+      {/* 检查结果 */}
       <SectionCard
-        title="Findings"
+        title="检查结果"
         description={`错误 ${errorCount} · 警告 ${warnCount} · 提示 ${infoCount}`}
         action={
           <div className="flex items-center gap-1.5">
@@ -555,7 +615,7 @@ function RunResult({ result, onJumpToRuns, onReset }: {
         }
       >
         {sorted.length === 0 ? (
-          <EmptyState title="无 Findings" hint="所有规则均通过" icon={CheckCircle2} />
+          <EmptyState title="无检查结果" hint="所有规则均通过" icon={CheckCircle2} />
         ) : (
           <ul className="flex flex-col gap-2">
             {sorted.map((f, i) => {

@@ -92,7 +92,7 @@ export function RuleEval() {
     if (ctxText.trim()) {
       try { ctx = JSON.parse(ctxText) }
       catch (e: any) {
-        toast.error('ctx JSON 格式错误', { description: e.message })
+        toast.error('测试数据格式错误', { description: e.message })
         return
       }
     }
@@ -119,7 +119,7 @@ export function RuleEval() {
       <PageHeader
         title="规则评测"
         icon={FlaskConical}
-        description="批量跑规则集 + 黄金样本；可选提供 ctx 测试整体命中情况"
+        description="批量测试规则集，可输入测试数据验证规则是否命中"
         actions={
           <Button size="sm" variant="ghost" onClick={refetch}>
             <RefreshCw className="size-3.5" /> 刷新规则集
@@ -130,7 +130,7 @@ export function RuleEval() {
       {/* 选择规则集 + ctx 输入 */}
       <SectionCard
         title="评测配置"
-        description="选择规则集，可选填 ctx 实时求值"
+        description="选择规则集，可填入测试数据实时验证"
       >
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -171,7 +171,7 @@ export function RuleEval() {
                   {running ? '评测中…' : '开始评测'}
                 </Button>
                 <Button size="sm" variant="ghost" className="h-9" onClick={() => setCtxText(SAMPLE_CTX)}>
-                  <Sparkles className="size-3.5" /> 加载示例 ctx
+                  <Sparkles className="size-3.5" /> 加载示例数据
                 </Button>
               </div>
             </div>
@@ -180,7 +180,7 @@ export function RuleEval() {
           <div className="flex flex-col gap-1.5">
             <label className="text-[11px] font-medium text-muted-foreground">
               <FileJson className="mr-1 inline size-3" />
-              ctx (JSON，可选) — 对每条规则求值，看是否命中
+              测试数据（可选）— 输入数据测试规则是否命中
             </label>
             <Textarea
               value={ctxText}
@@ -213,7 +213,7 @@ function EvalResult({ result }: { result: TestResult }) {
         <SummaryStat icon={XCircle} label="解析失败" value={s.parseErrors} accent={s.parseErrors > 0 ? 'rose' : 'slate'} />
         <SummaryStat icon={FlaskConical} label="黄金样本" value={s.totalTests} accent="slate" />
         <SummaryStat icon={CheckCircle2} label="样本通过" value={s.passedTests} accent="emerald" />
-        <SummaryStat icon={AlertTriangle} label="ctx 命中" value={s.userFiredRules} accent={s.userFiredRules > 0 ? 'amber' : 'slate'} />
+        <SummaryStat icon={AlertTriangle} label="测试命中" value={s.userFiredRules} accent={s.userFiredRules > 0 ? 'amber' : 'slate'} />
       </div>
 
       {/* 通过率进度条 */}
@@ -295,12 +295,12 @@ function EvalRuleRow({ r }: { r: TestResult['results'][number] }) {
                   : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300'
               )}>
                 {userFired ? <AlertTriangle className="size-2.5" /> : <CheckCircle2 className="size-2.5" />}
-                {userFired ? 'ctx 命中' : 'ctx 未命中'}
+                {userFired ? '测试命中' : '未命中'}
               </Badge>
             )}
             {r.userEval && 'error' in r.userEval && (
               <Badge variant="outline" className="border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-                ctx 求值异常
+                测试异常
               </Badge>
             )}
           </div>
@@ -352,12 +352,12 @@ function EvalRuleRow({ r }: { r: TestResult['results'][number] }) {
           {r.userEval && 'fired' in r.userEval && r.userEval.fired && r.userEval.message && (
             <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
               <AlertTriangle className="mr-1 inline size-3" />
-              <span className="font-medium">ctx 命中提示：</span>{r.userEval.message}
+              <span className="font-medium">测试命中提示：</span>{r.userEval.message}
             </div>
           )}
           {r.userEval && 'error' in r.userEval && (
             <div className="rounded-md bg-rose-50 p-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
-              <span className="font-medium">ctx 求值异常：</span>{r.userEval.error}
+              <span className="font-medium">测试异常：</span>{r.userEval.error}
             </div>
           )}
         </div>

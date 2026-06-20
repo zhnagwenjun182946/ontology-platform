@@ -54,7 +54,15 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   const { id } = await ctx.params;
   const before = await db.domain.findUnique({ where: { id } });
   if (!before) return NextResponse.json({ error: "not found" }, { status: 404 });
-  await db.domain.delete({ where: { id } });
+  // 先清理未声明级联的外键引用，再删除领域：
+  // - Concept.ownerDomain 无 onDelete，改为解除归属（保留概念本身）
+  // - RunRecord.scenario 无 onDelete，先删除其下运行记录（Findings 随 runId 级联清除）
+  // 领域删除时 DomainConcept / DomainRelation / RuleSet→Rule→RuleTest / Scenario 由 schema 级联清除
+  await db.$transaction([
+    db.concept.updateMany({ where: { ownerDomainId: id }, data: { ownerDomainId: null } }),
+    db.runRecord.deleteMany({ where: { scenario: { domainId: id } } }),
+    db.domain.delete({ where: { id } }),
+  ]);
   await db.auditLog.create({
     data: {
       actor: "web",

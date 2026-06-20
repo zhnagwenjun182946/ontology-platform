@@ -10,7 +10,11 @@ import { cn } from '@/lib/utils'
 import { useFetch } from './hooks'
 import {
   domainColor, domainHex, EQUIV_LABEL, statusBadgeClass,
+  parseJsonSchema, fieldTypeLabel,
 } from './lib'
+import {
+  computeLayout, layoutLabel, curvePath, type LayoutKind, type LayoutNode, type LayoutEdge,
+} from './layout'
 import {
   LoadingState, ErrorState, EmptyState, PageHeader, SectionCard,
   ScopeBadge, StatusBadge,
@@ -20,8 +24,11 @@ interface ConceptLite {
   id: string
   uri: string
   labelZh: string
+  labelEn?: string | null
+  description?: string | null
   scope: string
   ownerDomain?: { id: string; code: string; nameZh: string; color?: string | null } | null
+  jsonSchema?: string
 }
 
 interface AggCluster {
@@ -57,9 +64,12 @@ interface GraphNode {
   id: string
   uri: string
   label: string
+  labelEn?: string | null
+  description?: string | null
   scope: string
   domainCode: string | null
   domainName: string | null
+  jsonSchema?: string
   x: number
   y: number
   clusterId?: string
@@ -85,65 +95,45 @@ function buildGraph(
   concepts: ConceptLite[],
   agg: AggMap | null,
   domains: DomainDetail[],
-): { nodes: GraphNode[]; edges: GraphEdge[] } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; layoutNodes: LayoutNode[]; layoutEdges: LayoutEdge[] } {
   const nodes: GraphNode[] = []
   const edges: GraphEdge[] = []
   const nodeIndex = new Map<string, GraphNode>()
+  const layoutNodes: LayoutNode[] = []
 
-  // 1) 核心概念 - 居中圆环
+  // 1) 核心概念
   const coreConcepts = concepts.filter(c => c.scope === 'CORE')
-  const coreCenter = { x: VIEW_W / 2, y: VIEW_H / 2 }
-  coreConcepts.forEach((c, i) => {
-    const angle = (i / Math.max(coreConcepts.length, 1)) * Math.PI * 2 - Math.PI / 2
-    const x = coreCenter.x + Math.cos(angle) * CORE_RADIUS
-    const y = coreCenter.y + Math.sin(angle) * CORE_RADIUS
+  coreConcepts.forEach((c) => {
     const node: GraphNode = {
-      id: c.id, uri: c.uri, label: c.labelZh, scope: c.scope,
-      domainCode: null, domainName: null, x, y,
+      id: c.id, uri: c.uri, label: c.labelZh, labelEn: c.labelEn,
+      description: c.description, scope: c.scope, jsonSchema: c.jsonSchema,
+      domainCode: null, domainName: null, x: 0, y: 0,
     }
     nodes.push(node)
     nodeIndex.set(c.id, node)
+    layoutNodes.push({ id: c.id, label: c.labelZh, group: 'CORE', isCenter: true })
   })
 
-  // 2) 领域概念 - 按领域扇区排布
+  // 2) 领域概念
   const domainConcepts = concepts.filter(c => c.scope === 'DOMAIN')
-  const domainsWithConcepts = new Map<string, ConceptLite[]>()
-  for (const c of domainConcepts) {
+  domainConcepts.forEach((c) => {
     const code = c.ownerDomain?.code ?? 'unknown'
-    if (!domainsWithConcepts.has(code)) domainsWithConcepts.set(code, [])
-    domainsWithConcepts.get(code)!.push(c)
-  }
-
-  const domainList = Array.from(domainsWithConcepts.entries())
-  domainList.forEach(([code, list], domainIdx) => {
-    const totalDomains = Math.max(domainList.length, 1)
-    // 领域基线角度：均分整圆，留出顶部
-    const baseAngle = (domainIdx / totalDomains) * Math.PI * 2 - Math.PI / 2
-    const sectorSpan = (Math.PI * 2) / totalDomains * 0.7 // 占该扇区 70%
-
-    list.forEach((c, i) => {
-      const n = Math.max(list.length, 1)
-      // 在扇区内做小角度展开 + 小半径抖动
-      const subAngle = baseAngle + (i - (n - 1) / 2) * (sectorSpan / Math.max(n, 1))
-      const r = DOMAIN_RADIUS + ((i % 3) - 1) * 30
-      const x = coreCenter.x + Math.cos(subAngle) * r
-      const y = coreCenter.y + Math.sin(subAngle) * r
-      const node: GraphNode = {
-        id: c.id, uri: c.uri, label: c.labelZh, scope: c.scope,
-        domainCode: code,
-        domainName: c.ownerDomain?.nameZh ?? null,
-        x, y,
-      }
-      nodes.push(node)
-      nodeIndex.set(c.id, node)
-    })
+    const node: GraphNode = {
+      id: c.id, uri: c.uri, label: c.labelZh, labelEn: c.labelEn,
+      description: c.description, scope: c.scope, jsonSchema: c.jsonSchema,
+      domainCode: code,
+      domainName: c.ownerDomain?.nameZh ?? null,
+      x: 0, y: 0,
+    }
+    nodes.push(node)
+    nodeIndex.set(c.id, node)
+    layoutNodes.push({ id: c.id, label: c.labelZh, group: code })
   })
 
   // 3) 等价关系 - 虚线
   if (agg) {
     for (const cluster of agg.clusters) {
       const memberIds = cluster.members.map(m => m.id)
-      // 簇内成员两两相连（但只画 1 跳到核心，避免太密）
       const core = cluster.members.find(m => m.scope === 'CORE')
       if (core) {
         for (const m of cluster.members) {
@@ -155,7 +145,6 @@ function buildGraph(
           })
         }
       } else if (memberIds.length > 1) {
-        // 无核心的簇：连成链
         for (let i = 1; i < memberIds.length; i++) {
           if (!nodeIndex.has(memberIds[i]) || !nodeIndex.has(memberIds[i - 1])) continue
           edges.push({
@@ -183,7 +172,20 @@ function buildGraph(
     }
   }
 
-  return { nodes, edges }
+  // 布局用的边（所有边都参与布局）
+  const layoutEdges: LayoutEdge[] = edges.map(e => ({ from: e.from, to: e.to }))
+
+  return { nodes, edges, layoutNodes, layoutEdges }
+}
+
+/** 应用布局算法，把坐标写回 nodes */
+function applyLayout(nodes: GraphNode[], layoutNodes: LayoutNode[], layoutEdges: LayoutEdge[], kind: LayoutKind) {
+  const positions = computeLayout(layoutNodes, layoutEdges, kind)
+  const posMap = new Map(positions.map(p => [p.id, p]))
+  for (const n of nodes) {
+    const p = posMap.get(n.id)
+    if (p) { n.x = p.x; n.y = p.y }
+  }
 }
 
 export function OntologyGraph() {
@@ -210,11 +212,58 @@ export function OntologyGraph() {
 
   const [selected, setSelected] = React.useState<string | null>(null)
   const [zoom, setZoom] = React.useState(1)
+  const [layoutKind, setLayoutKind] = React.useState<LayoutKind>('hierarchy')
+  // 节点拖动
+  const [dragOverride, setDragOverride] = React.useState<Map<string, { x: number; y: number }>>(new Map())
+  const dragRef = React.useRef<{ id: string; offsetX: number; offsetY: number } | null>(null)
+  const svgRef = React.useRef<SVGSVGElement | null>(null)
+
+  React.useEffect(() => {
+    setDragOverride(new Map())
+  }, [layoutKind])
 
   const graph = React.useMemo(() => {
-    if (!conceptsResp.data) return { nodes: [], edges: [] }
-    return buildGraph(conceptsResp.data, aggResp.data, domainDetails)
-  }, [conceptsResp.data, aggResp.data, domainDetails])
+    if (!conceptsResp.data) return { nodes: [], edges: [], layoutNodes: [], layoutEdges: [] }
+    const g = buildGraph(conceptsResp.data, aggResp.data, domainDetails)
+    applyLayout(g.nodes, g.layoutNodes, g.layoutEdges, layoutKind)
+    return g
+  }, [conceptsResp.data, aggResp.data, domainDetails, layoutKind])
+
+  const toSvgCoords = React.useCallback((clientX: number, clientY: number) => {
+    const svg = svgRef.current
+    if (!svg) return { x: 0, y: 0 }
+    const pt = svg.createSVGPoint()
+    pt.x = clientX
+    pt.y = clientY
+    const ctm = svg.getScreenCTM()
+    if (!ctm) return { x: 0, y: 0 }
+    const p = pt.matrixTransform(ctm.inverse())
+    return { x: p.x, y: p.y }
+  }, [])
+
+  const handleNodeMouseDown = React.useCallback((e: React.MouseEvent, nodeId: string) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const node = graph.nodes.find(n => n.id === nodeId)
+    if (!node) return
+    const pos = toSvgCoords(e.clientX, e.clientY)
+    dragRef.current = { id: nodeId, offsetX: pos.x - node.x, offsetY: pos.y - node.y }
+  }, [graph.nodes, toSvgCoords])
+
+  const handleMouseMove = React.useCallback((e: React.MouseEvent) => {
+    if (!dragRef.current) return
+    const pos = toSvgCoords(e.clientX, e.clientY)
+    const { id, offsetX, offsetY } = dragRef.current
+    setDragOverride(prev => {
+      const next = new Map(prev)
+      next.set(id, { x: pos.x - offsetX, y: pos.y - offsetY })
+      return next
+    })
+  }, [toSvgCoords])
+
+  const handleMouseUp = React.useCallback(() => {
+    dragRef.current = null
+  }, [])
 
   if (loading) return <LoadingState label="加载本体图谱…" />
   if (error || !conceptsResp.data) return <ErrorState message={error || '加载失败'} onRetry={conceptsResp.refetch} />
@@ -229,14 +278,24 @@ export function OntologyGraph() {
       <PageHeader
         title="本体图谱"
         icon={Share2}
-        description="核心概念居中，领域概念按域分组排布。虚线 = 等价关系，实线箭头 = 包含/引用关系。"
+        description="核心概念居中，领域概念按域分组。虚线表示相同概念，实线箭头表示包含或引用关系。"
         actions={
-          <div className="flex items-center gap-1">
-            <Button size="sm" variant="outline" onClick={() => setZoom(z => Math.max(0.5, z - 0.1))} aria-label="缩小">
+          <div className="flex items-center gap-2">
+            <select
+              value={layoutKind}
+              onChange={(e) => setLayoutKind(e.target.value as LayoutKind)}
+              className="h-8 rounded-md border bg-background px-2 text-xs text-foreground"
+              aria-label="切换布局"
+            >
+              <option value="hierarchy">{layoutLabel('hierarchy')}</option>
+              <option value="force">{layoutLabel('force')}</option>
+              <option value="radial">{layoutLabel('radial')}</option>
+            </select>
+            <Button size="sm" variant="outline" onClick={() => setZoom(z => Math.max(0.5, z - 0.2))} aria-label="缩小">
               <ZoomOut className="size-3.5" />
             </Button>
             <span className="w-12 text-center text-xs font-mono text-muted-foreground">{Math.round(zoom * 100)}%</span>
-            <Button size="sm" variant="outline" onClick={() => setZoom(z => Math.min(2, z + 0.1))} aria-label="放大">
+            <Button size="sm" variant="outline" onClick={() => setZoom(z => Math.min(4, z + 0.2))} aria-label="放大">
               <ZoomIn className="size-3.5" />
             </Button>
             <Button size="sm" variant="outline" onClick={() => setZoom(1)} aria-label="重置">
@@ -273,14 +332,18 @@ export function OntologyGraph() {
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         {/* SVG 图谱 */}
         <SectionCard bodyClassName="p-2 sm:p-3">
-          <div className="relative overflow-auto rounded-lg bg-gradient-to-br from-slate-50 to-white p-2 dark:from-slate-900/50 dark:to-slate-900/30 scrollbar-thin">
+          <div className="relative h-[640px] min-w-0 overflow-auto rounded-lg bg-gradient-to-br from-slate-50 to-white p-2 dark:from-slate-900/50 dark:to-slate-900/30 scrollbar-thin">
             <svg
+              ref={svgRef}
               viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-              className="h-[640px] w-full"
-              style={{ transform: `scale(${zoom})`, transformOrigin: 'center' }}
+              className={cn('h-[640px]', zoom === 1 && 'w-full')}
+              style={zoom === 1 ? undefined : { width: VIEW_W * zoom, height: VIEW_H * zoom }}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
               role="img"
               aria-label="本体关系图谱"
             >
@@ -298,20 +361,63 @@ export function OntologyGraph() {
                 const from = graph.nodes.find(n => n.id === e.from)
                 const to = graph.nodes.find(n => n.id === e.to)
                 if (!from || !to) return null
+                const fromOv = dragOverride.get(e.from)
+                const toOv = dragOverride.get(e.to)
+                const fx = fromOv?.x ?? from.x
+                const fy = fromOv?.y ?? from.y
+                const tx = toOv?.x ?? to.x
+                const ty = toOv?.y ?? to.y
                 const isEq = e.type === 'equivalence'
                 const isPending = e.status === 'PROPOSED'
                 const stroke = isEq ? (isPending ? '#a855f7' : '#64748b') : domainHex(from.domainCode)
+                // 统计同一对节点间的边索引，错开弯曲
+                const samePairIdx = graph.edges.filter(e2 =>
+                  (e2.from === e.from && e2.to === e.to) || (e2.from === e.to && e2.to === e.from)
+                ).indexOf(e)
+                const r = 20
+                const { path, midX, midY } = curvePath(fx, fy, tx, ty, r, samePairIdx)
                 return (
-                  <line
-                    key={i}
-                    x1={from.x} y1={from.y}
-                    x2={to.x} y2={to.y}
-                    stroke={stroke}
-                    strokeWidth={isEq ? 1.5 : 2}
-                    strokeDasharray={isEq ? '5,4' : undefined}
-                    markerEnd={isEq ? undefined : 'url(#arrow)'}
-                    opacity={isEq ? 0.6 : 0.85}
-                  />
+                  <g key={i}>
+                    <path
+                      d={path}
+                      fill="none"
+                      stroke={stroke}
+                      strokeWidth={isEq ? 1.5 : 2}
+                      strokeDasharray={isEq ? '5,4' : undefined}
+                      markerEnd={isEq ? undefined : 'url(#arrow)'}
+                      opacity={isEq ? 0.6 : 0.85}
+                    />
+                    {/* 关系名称标签 */}
+                    {!isEq && e.relationName && (
+                      <text
+                        x={midX}
+                        y={midY}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fontSize="10"
+                        fontWeight="500"
+                        fill={stroke}
+                        className="pointer-events-none select-none"
+                        style={{ paintOrder: 'stroke', stroke: 'white', strokeWidth: 3, strokeLinejoin: 'round' }}
+                      >
+                        {e.relationName}
+                      </text>
+                    )}
+                    {isEq && (
+                      <text
+                        x={midX}
+                        y={midY}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fontSize="9"
+                        fill={stroke}
+                        className="pointer-events-none select-none"
+                        style={{ paintOrder: 'stroke', stroke: 'white', strokeWidth: 3, strokeLinejoin: 'round' }}
+                      >
+                        等价
+                      </text>
+                    )}
+                  </g>
                 )
               })}
 
@@ -321,11 +427,15 @@ export function OntologyGraph() {
                 const hex = isCore ? '#0f172a' : domainHex(n.domainCode)
                 const isSelected = n.id === selected
                 const r = isCore ? 22 : 18
+                const ov = dragOverride.get(n.id)
+                const nx = ov?.x ?? n.x
+                const ny = ov?.y ?? n.y
                 return (
                   <g
                     key={n.id}
-                    transform={`translate(${n.x},${n.y})`}
-                    className="cursor-pointer transition-all"
+                    transform={`translate(${nx},${ny})`}
+                    className="cursor-grab active:cursor-grabbing transition-all"
+                    onMouseDown={(ev) => handleNodeMouseDown(ev, n.id)}
                     onClick={() => setSelected(n.id)}
                   >
                     {isSelected && (
@@ -349,6 +459,18 @@ export function OntologyGraph() {
                     >
                       {n.label}
                     </text>
+                    {/* 领域概念显示领域 code 前缀，区分同名概念 */}
+                    {!isCore && n.domainCode && (
+                      <text
+                        y={r + 24}
+                        textAnchor="middle"
+                        className="pointer-events-none select-none"
+                        fontSize="8"
+                        fill="#94a3b8"
+                      >
+                        {n.domainCode}
+                      </text>
+                    )}
                     {isCore && (
                       <text
                         textAnchor="middle"
@@ -392,10 +514,61 @@ export function OntologyGraph() {
                   </Badge>
                 )}
               </div>
+
+              {/* 概念名称 */}
+              <div className="rounded-md bg-muted/40 p-2.5">
+                <div className="text-[10px] text-muted-foreground">概念名称</div>
+                <div className="font-medium text-foreground">{selectedNode.label}</div>
+                {selectedNode.labelEn && (
+                  <code className="font-mono text-[10px] text-muted-foreground">{selectedNode.labelEn}</code>
+                )}
+              </div>
+
+              {/* 描述 */}
+              {selectedNode.description && (
+                <div className="rounded-md bg-muted/40 p-2.5">
+                  <div className="text-[10px] text-muted-foreground">描述</div>
+                  <div className="text-foreground">{selectedNode.description}</div>
+                </div>
+              )}
+
               <div className="rounded-md bg-muted/40 p-2.5">
                 <div className="text-[10px] text-muted-foreground">URI</div>
                 <code className="font-mono text-foreground">{selectedNode.uri}</code>
               </div>
+
+              {/* 字段属性 */}
+              {(() => {
+                const fields = parseJsonSchema(selectedNode.jsonSchema)
+                if (fields.length === 0) return null
+                return (
+                  <div className="flex flex-col gap-1.5">
+                    <div className="text-[11px] font-medium text-muted-foreground">字段属性 ({fields.length})</div>
+                    <div className="overflow-hidden rounded-md border">
+                      <table className="w-full text-[10px]">
+                        <thead className="bg-muted/40">
+                          <tr>
+                            <th className="px-2 py-1 text-left font-medium text-muted-foreground">字段</th>
+                            <th className="px-2 py-1 text-left font-medium text-muted-foreground">类型</th>
+                            <th className="px-2 py-1 text-left font-medium text-muted-foreground">必填</th>
+                            <th className="px-2 py-1 text-left font-medium text-muted-foreground">说明</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {fields.map((f, i) => (
+                            <tr key={i} className="border-t">
+                              <td className="px-2 py-1 font-mono text-foreground">{f.name}</td>
+                              <td className="px-2 py-1 font-mono text-muted-foreground">{fieldTypeLabel(f)}</td>
+                              <td className="px-2 py-1">{f.required ? <span className="text-rose-500">是</span> : <span className="text-muted-foreground">否</span>}</td>
+                              <td className="px-2 py-1 text-muted-foreground">{f.label || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )
+              })()}
 
               <div className="flex flex-col gap-1.5">
                 <div className="text-[11px] font-medium text-muted-foreground">关联边 ({selectedEdges.length})</div>

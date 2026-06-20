@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import {
   Code2, FileText, Cpu, Play, Save, RefreshCw, Search,
   FolderTree, Tag, Target, Calendar, AlertTriangle, CheckCircle2, XCircle, Sparkles,
+  ChevronRight,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -68,7 +69,17 @@ export function RuleEngine() {
   const [sevFilter, setSevFilter] = React.useState('all')
   const [q, setQ] = React.useState('')
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
+  const [collapsedSets, setCollapsedSets] = React.useState<Set<string>>(new Set())
   const { data, loading, error, refetch } = useFetch<RuleList[]>('/rules')
+
+  const toggleCollapse = (id: string) => {
+    setCollapsedSets(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   // 按 ruleset 分组
   const grouped = React.useMemo(() => {
@@ -101,7 +112,7 @@ export function RuleEngine() {
       <PageHeader
         title="规则引擎"
         icon={Code2}
-        description="DSL 编辑 · 可读渲染 · SHACL 编译 · 试运行。一份规则，三视图呈现。"
+        description="规则编辑 · 中文说明 · 一键测试"
         actions={
           <Button size="sm" variant="outline" onClick={refetch}>
             <RefreshCw className="size-3.5" /> 刷新
@@ -135,7 +146,7 @@ export function RuleEngine() {
             </Tabs>
           </div>
 
-          <div className="max-h-[640px] overflow-y-auto scrollbar-thin">
+          <div>
             {loading ? (
               <LoadingState label="加载规则…" />
             ) : error ? (
@@ -143,49 +154,62 @@ export function RuleEngine() {
             ) : grouped.length === 0 ? (
               <EmptyState title="无匹配规则" />
             ) : (
-              grouped.map(({ ruleset, rules }) => {
+              <>
+              {grouped.map(({ ruleset, rules }) => {
                 const dc = domainColor(ruleset.domain?.code)
+                const isCollapsed = collapsedSets.has(ruleset.id)
                 return (
                   <div key={ruleset.id} className="flex flex-col">
-                    <div className="flex items-center gap-1.5 border-y bg-muted/40 px-3 py-1.5">
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapse(ruleset.id)}
+                      className="flex w-full items-center gap-1.5 border-y bg-muted/40 px-3 py-1.5 text-left transition-colors hover:bg-muted/60"
+                    >
+                      <ChevronRight className={cn('size-3 text-muted-foreground transition-transform', !isCollapsed && 'rotate-90')} />
                       <FolderTree className="size-3 text-muted-foreground" />
                       <span className="text-[11px] font-semibold text-foreground">{ruleset.name}</span>
                       <span className="text-[10px] font-mono text-muted-foreground">{ruleset.code}</span>
+                      <span className="text-[10px] text-muted-foreground">{rules.length} 条</span>
                       {ruleset.domain && (
                         <Badge variant="outline" className={cn('ml-auto border-0 text-[10px]', dc.bg, dc.text)}>
                           {ruleset.domain.nameZh}
                         </Badge>
                       )}
-                    </div>
-                    {rules.map(r => {
-                      const active = r.id === selectedId
-                      return (
-                        <button
-                          key={r.id}
-                          type="button"
-                          onClick={() => setSelectedId(r.id)}
-                          className={cn(
-                            'flex flex-col gap-1 border-l-2 px-3 py-2.5 text-left transition-colors',
-                            active ? 'border-l-primary bg-primary/5' : 'border-l-transparent hover:bg-muted/40'
-                          )}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-[11px] font-semibold text-foreground">{r.code}</span>
-                            <SeverityBadge severity={r.severity} />
-                            <span className="ml-auto text-[10px] text-muted-foreground">
-                              {r._count.findings} 命中
-                            </span>
-                          </div>
-                          <div className="text-xs text-muted-foreground">{r.name}</div>
-                          {r.targetPath && (
-                            <code className="font-mono text-[10px] text-muted-foreground/80">→ {r.targetPath}</code>
-                          )}
-                        </button>
-                      )
-                    })}
+                    </button>
+                    {!isCollapsed && (
+                      <>
+                      {rules.map(r => {
+                        const active = r.id === selectedId
+                        return (
+                          <button
+                            key={r.id}
+                            type="button"
+                            onClick={() => setSelectedId(r.id)}
+                            className={cn(
+                              'flex flex-col gap-1 border-l-2 px-3 py-2.5 pl-6 text-left transition-colors',
+                              active ? 'border-l-primary bg-primary/5' : 'border-l-transparent hover:bg-muted/40'
+                            )}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-[11px] font-semibold text-foreground">{r.code}</span>
+                              <SeverityBadge severity={r.severity} />
+                              <span className="ml-auto text-[10px] text-muted-foreground">
+                                {r._count.findings} 命中
+                              </span>
+                            </div>
+                            <div className="text-xs text-muted-foreground">{r.name}</div>
+                            {r.targetPath && (
+                              <code className="font-mono text-[10px] text-muted-foreground/80">→ {r.targetPath}</code>
+                            )}
+                          </button>
+                        )
+                      })}
+                      </>
+                    )}
                   </div>
                 )
-              })
+              })}
+              </>
             )}
           </div>
         </SectionCard>
@@ -249,9 +273,9 @@ function RuleDetailPanel({ id }: { id: string | null }) {
         method: 'POST', json: { action: 'compile' },
       })
       setShacl(r.shacl)
-      toast.success('编译成功', { description: 'SHACL 已生成' })
+      toast.success('生成成功', { description: '校验规则已生成' })
     } catch (e: any) {
-      toast.error('编译失败', { description: e.message })
+      toast.error('生成失败', { description: e.message })
     } finally {
       setCompiling(false)
     }
@@ -333,7 +357,7 @@ function RuleDetailPanel({ id }: { id: string | null }) {
           <div className="mt-2 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
             <div>
-              <div className="font-medium">DSL 解析失败</div>
+              <div className="font-medium">规则格式错误</div>
               <div className="font-mono text-[11px]">{data.parseError}</div>
             </div>
           </div>
@@ -348,8 +372,8 @@ function RuleDetailPanel({ id }: { id: string | null }) {
           <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
             <TabsList>
               <TabsTrigger value="human" className="gap-1.5 text-xs"><FileText className="size-3.5" /> 可读</TabsTrigger>
-              <TabsTrigger value="dsl" className="gap-1.5 text-xs"><Code2 className="size-3.5" /> DSL</TabsTrigger>
-              <TabsTrigger value="shacl" className="gap-1.5 text-xs"><Cpu className="size-3.5" /> SHACL</TabsTrigger>
+              <TabsTrigger value="dsl" className="gap-1.5 text-xs"><Code2 className="size-3.5" /> 规则配置</TabsTrigger>
+              <TabsTrigger value="shacl" className="gap-1.5 text-xs"><Cpu className="size-3.5" /> 校验规则</TabsTrigger>
             </TabsList>
           </Tabs>
         }
@@ -359,7 +383,7 @@ function RuleDetailPanel({ id }: { id: string | null }) {
           {tab === 'dsl' && (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">YAML 风格 DSL · 可直接编辑</span>
+                <span className="text-xs text-muted-foreground">规则配置文本，可直接编辑</span>
                 <div className="flex items-center gap-1.5">
                   <Button size="sm" variant="outline" onClick={() => setDslDraft(data.dsl)}>
                     还原
@@ -375,14 +399,14 @@ function RuleDetailPanel({ id }: { id: string | null }) {
                 onChange={(e) => setDslDraft(e.target.value)}
                 className="min-h-[360px] resize-y bg-slate-50 font-mono text-xs leading-relaxed dark:bg-slate-900/50 scrollbar-thin"
                 spellCheck={false}
-                aria-label="规则 DSL 编辑器"
+                aria-label="规则编辑器"
               />
             </div>
           )}
           {tab === 'shacl' && (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">SHACL 编译产物（只读）</span>
+                <span className="text-xs text-muted-foreground">生成的校验规则（只读）</span>
                 <Button size="sm" variant="outline" onClick={handleCompile} disabled={compiling}>
                   {compiling ? <RefreshCw className="size-3.5 animate-spin" /> : <Cpu className="size-3.5" />}
                   {shacl ? '重新编译' : '编译'}
@@ -395,7 +419,7 @@ function RuleDetailPanel({ id }: { id: string | null }) {
               ) : (
                 <EmptyState
                   title="尚未编译"
-                  hint="点击「编译」生成 SHACL 产物"
+                  hint="点击「生成」创建校验规则"
                   icon={Cpu}
                 />
               )}
@@ -412,7 +436,7 @@ function RuleDetailPanel({ id }: { id: string | null }) {
       >
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground">输入 JSON（ctx）</span>
+            <span className="text-xs text-muted-foreground">输入测试数据</span>
             <Button size="sm" variant="ghost" onClick={() => setEvalCtx(SAMPLE_CTX)}>
               <Sparkles className="size-3.5" /> 加载示例
             </Button>
@@ -478,7 +502,7 @@ function HumanReadableView({
   message?: string | null
 }) {
   if (!lines || lines.length === 0) {
-    return <EmptyState title="无可读渲染" hint="DSL 解析失败或未提供" />
+    return <EmptyState title="无可读渲染" hint="规则格式错误或未提供" />
   }
   const s = severityStyle(severity)
 

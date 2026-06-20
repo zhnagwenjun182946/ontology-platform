@@ -50,7 +50,7 @@ export function OverlapMatrix() {
       <PageHeader
         title="跨领域重叠矩阵"
         icon={Grid3x3}
-        description="可视化任意两个领域之间共享的概念，发现可下沉到核心本体的候选"
+        description="查看不同领域之间共享的概念，发现可以复用的通用概念"
         actions={
           <Button size="sm" variant="ghost" onClick={refetch}>
             <RefreshCw className="size-3.5" /> 刷新
@@ -203,7 +203,7 @@ function CellDetail({ cell }: { cell: MatrixCell }) {
         <div className="mt-3 rounded-md border border-violet-200 bg-violet-50 p-3 text-xs text-violet-700 dark:border-violet-900 dark:bg-violet-950/40 dark:text-violet-300">
           <AlertCircle className="mr-1 inline size-3" />
           这两个领域有 <strong>{cell.pendingEquivalences}</strong> 条待评审的等价关系。
-          建议到「概念仓库 → 聚合视图」确认后，可将公共概念下沉到核心本体。
+          建议到「概念仓库 → 合并视图」确认后，可将公共概念设为通用概念。
         </div>
       )}
     </SectionCard>

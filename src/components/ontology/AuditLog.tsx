@@ -13,6 +13,9 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 
 import { useFetch } from './hooks'
@@ -20,6 +23,7 @@ import { api, fmtTime } from './lib'
 import {
   LoadingState, ErrorState, EmptyState, PageHeader, SectionCard,
 } from './primitives'
+import { Pagination } from './Pagination'
 
 interface AuditItem {
   id: string
@@ -111,6 +115,14 @@ export function AuditLog() {
     )
   }, [data, query])
 
+  // 前端分页
+  const [page, setPage] = React.useState(1)
+  const pageSize = 20
+  React.useEffect(() => { setPage(1) }, [filterType, filterAction, filterActor, query])
+  const totalPages = Math.ceil(filtered.length / pageSize)
+  const currentPage = Math.min(page, totalPages || 1)
+  const paged = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+
   // 统计：按动作聚合
   const actionCounts = React.useMemo(() => {
     const m = new Map<string, number>()
@@ -125,7 +137,7 @@ export function AuditLog() {
       <PageHeader
         title="审计日志"
         icon={ScrollText}
-        description="平台所有变更操作的留痕记录，可按实体类型/动作/操作人筛选"
+        description="平台所有操作记录，可按类型、动作、操作人筛选"
         actions={
           <Button size="sm" variant="ghost" onClick={refetch}>
             <RefreshCw className="size-3.5" /> 刷新
@@ -173,19 +185,19 @@ export function AuditLog() {
             <Input
               value={filterActor}
               onChange={(e) => setFilterActor(e.target.value)}
-              placeholder="如 web / system"
+              placeholder="如 操作人"
               className="h-9 text-xs"
             />
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-[11px] font-medium text-muted-foreground">关键字（含 JSON 内容）</label>
+            <label className="text-[11px] font-medium text-muted-foreground">关键字搜索</label>
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="搜索动作/实体/字段…"
+                placeholder="搜索动作或内容…"
                 className="h-9 pl-8 text-xs"
               />
             </div>
@@ -209,6 +221,7 @@ export function AuditLog() {
       <SectionCard
         title="日志明细"
         description={`${filtered.length} 条匹配`}
+        bodyClassName="p-0"
       >
         {loading ? (
           <LoadingState label="加载审计日志…" />
@@ -217,11 +230,30 @@ export function AuditLog() {
         ) : filtered.length === 0 ? (
           <EmptyState title="无审计日志" hint="当前筛选条件下没有记录" icon={ScrollText} />
         ) : (
-          <ul className="flex flex-col gap-2 max-h-[640px] overflow-y-auto scrollbar-thin pr-1">
-            {filtered.map((item) => (
-              <AuditRow key={item.id} item={item} />
-            ))}
-          </ul>
+          <>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/40">
+                  <TableHead className="text-xs">动作</TableHead>
+                  <TableHead className="text-xs">类型</TableHead>
+                  <TableHead className="text-xs">摘要</TableHead>
+                  <TableHead className="text-xs">操作人</TableHead>
+                  <TableHead className="text-xs">时间</TableHead>
+                  <TableHead className="text-xs"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paged.map((item) => (
+                  <AuditRow key={item.id} item={item} />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="px-4">
+            <Pagination total={filtered.length} page={currentPage} pageSize={pageSize} onChange={setPage} />
+          </div>
+          </>
         )}
       </SectionCard>
     </div>
@@ -242,74 +274,57 @@ function AuditRow({ item }: { item: AuditItem }) {
   const summaryFields = after
     ? Object.entries(after).filter(([k]) =>
         ['labelZh', 'labelEn', 'name', 'code', 'severity', 'uri', 'status'].includes(k)
-      ).slice(0, 3)
+      ).slice(0, 2)
     : before
     ? Object.entries(before).filter(([k]) =>
         ['labelZh', 'labelEn', 'name', 'code', 'severity', 'uri', 'status'].includes(k)
-      ).slice(0, 3)
+      ).slice(0, 2)
     : []
+  const summaryText = summaryFields.map(([k, v]) => `${k}: ${String(v)}`).join(' · ') || '-'
 
   return (
-    <li className="overflow-hidden rounded-lg border bg-card shadow-sm transition-shadow hover:shadow-md">
-      <button
-        type="button"
+    <>
+      <TableRow
+        className="cursor-pointer text-xs hover:bg-muted/40"
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-start gap-3 p-3 text-left"
       >
-        <div className={cn('flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/50', meta.color)}>
-          <Icon className="size-4" />
-        </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className={cn('border', actionStyle(item.action))}>
-              {actionLabel(item.action)}
-            </Badge>
-            <span className="text-xs text-muted-foreground">{meta.label}</span>
-            {item.entityId && (
-              <code className="font-mono text-[10px] text-muted-foreground/70">{item.entityId.slice(-8)}</code>
-            )}
-            <span className="ml-auto text-[11px] text-muted-foreground">{fmtTime(item.at)}</span>
-          </div>
-          {/* 摘要字段 */}
-          {summaryFields.length > 0 && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
-              {summaryFields.map(([k, v]) => (
-                <span key={k} className="text-muted-foreground">
-                  <span className="text-muted-foreground/70">{k}:</span>{' '}
-                  <span className="font-medium text-foreground">{String(v)}</span>
-                </span>
-              ))}
-            </div>
-          )}
-          {/* 操作人 */}
-          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-            <User className="size-3" />
-            <span>{item.actor}</span>
-          </div>
-        </div>
-        <ChevronRight className={cn('mt-1 size-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-90')} />
-      </button>
-
+        <TableCell>
+          <Badge variant="outline" className={cn('border text-[10px]', actionStyle(item.action))}>
+            {actionLabel(item.action)}
+          </Badge>
+        </TableCell>
+        <TableCell className="text-muted-foreground">{meta.label}</TableCell>
+        <TableCell className="max-w-[300px] truncate text-foreground">{summaryText}</TableCell>
+        <TableCell className="text-muted-foreground">{item.actor}</TableCell>
+        <TableCell className="whitespace-nowrap text-muted-foreground">{fmtTime(item.at)}</TableCell>
+        <TableCell>
+          <ChevronRight className={cn('size-3 text-muted-foreground transition-transform', expanded && 'rotate-90')} />
+        </TableCell>
+      </TableRow>
       {expanded && (before || after) && (
-        <div className="grid gap-2 border-t bg-muted/30 p-3 sm:grid-cols-2">
-          {before && (
-            <div className="flex flex-col gap-1">
-              <div className="text-[10px] font-medium uppercase tracking-wide text-rose-600 dark:text-rose-400">变更前</div>
-              <pre className="overflow-x-auto rounded bg-rose-50 p-2 font-mono text-[10px] text-rose-900 dark:bg-rose-950/40 dark:text-rose-200 scrollbar-thin">
-                <code>{JSON.stringify(before, null, 2)}</code>
-              </pre>
+        <TableRow className="bg-muted/20">
+          <TableCell colSpan={6} className="p-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              {before && (
+                <div className="flex min-w-0 flex-col gap-1">
+                  <div className="text-[10px] font-medium text-muted-foreground">变更前</div>
+                  <pre className="overflow-x-auto rounded bg-muted p-2 font-mono text-[10px] text-foreground scrollbar-thin">
+                    <code className="break-all whitespace-pre-wrap">{JSON.stringify(before, null, 2)}</code>
+                  </pre>
+                </div>
+              )}
+              {after && (
+                <div className="flex min-w-0 flex-col gap-1">
+                  <div className="text-[10px] font-medium text-muted-foreground">变更后</div>
+                  <pre className="overflow-x-auto rounded bg-muted p-2 font-mono text-[10px] text-foreground scrollbar-thin">
+                    <code className="break-all whitespace-pre-wrap">{JSON.stringify(after, null, 2)}</code>
+                  </pre>
+                </div>
+              )}
             </div>
-          )}
-          {after && (
-            <div className="flex flex-col gap-1">
-              <div className="text-[10px] font-medium uppercase tracking-wide text-emerald-600 dark:text-emerald-400">变更后</div>
-              <pre className="overflow-x-auto rounded bg-emerald-50 p-2 font-mono text-[10px] text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200 scrollbar-thin">
-                <code>{JSON.stringify(after, null, 2)}</code>
-              </pre>
-            </div>
-          )}
-        </div>
+          </TableCell>
+        </TableRow>
       )}
-    </li>
+    </>
   )
 }

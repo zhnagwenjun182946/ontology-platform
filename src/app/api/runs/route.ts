@@ -125,6 +125,7 @@ export async function POST(req: NextRequest) {
       }
 
       payloadObj = result.data;
+      console.log(`[Run] 抽取成功 run=${run.id} 耗时=${result.durationMs}ms 对象字段=${Object.keys(payloadObj || {}).join(',')}`);
     } else {
       // JSON 模式：直接用 payload
       payloadObj = typeof body.payload === "string" ? JSON.parse(body.payload) : body.payload;
@@ -165,10 +166,33 @@ export async function POST(req: NextRequest) {
       for (const [key, label] of Object.entries(knownMainLabels)) {
         const v = (payloadObj as any)[key];
         if (v && typeof v === "object" && !Array.isArray(v)) {
+          // 只有含标识字段（id/name/loanId 等）的才记录为实体，
+          // 排除纯上下文对象（如 reimbursement 的 employee:{level:"M1"} 只是职级上下文）
+          const hasIdentity = v.id || v.name || v.loanId || v.number || v.code;
+          if (hasIdentity) {
+            extractedObjects.push({
+              runId: run.id,
+              conceptLabel: label,
+              jsonPayload: JSON.stringify(v),
+            });
+          }
+        }
+      }
+    }
+    // 顶层 payload 本身可能就是主单据（如 reimbursement 报销单直接是顶层对象，
+    // 有 id/submitter/buyer + lines/items）。若已有嵌套主单据则不重复记录。
+    if (payloadObj && typeof payloadObj === "object") {
+      const hasNestedMain = extractedObjects.some(o =>
+        o.conceptLabel === "ExpenseReport" || o.conceptLabel === "ProcurementRequest" || o.conceptLabel === "Loan"
+      );
+      if (!hasNestedMain) {
+        const isReimbursement = payloadObj.submitter || (payloadObj.id && Array.isArray(payloadObj.lines));
+        const isProcurement = payloadObj.buyer || (payloadObj.id && Array.isArray(payloadObj.items));
+        if (isReimbursement || isProcurement) {
           extractedObjects.push({
             runId: run.id,
-            conceptLabel: label,
-            jsonPayload: JSON.stringify(v),
+            conceptLabel: isProcurement ? "ProcurementRequest" : "ExpenseReport",
+            jsonPayload: JSON.stringify(payloadObj),
           });
         }
       }
@@ -278,14 +302,41 @@ export async function POST(req: NextRequest) {
         status: "SUCCESS",
         finishedAt: new Date(),
         summary,
+        // 留存 LLM 抽取完整结果 + 调用元信息
+        extractionJson: JSON.stringify(payloadObj),
+        extractionMeta: extractionMeta ? JSON.stringify(extractionMeta) : null,
       },
     });
+
+    // 运行成功审计
+    await db.auditLog.create({
+      data: {
+        actor: "web",
+        action: "CREATE_RUN",
+        entityType: "RunRecord",
+        entityId: run.id,
+        afterJson: JSON.stringify({
+          scenarioId,
+          scenarioName: scenario.name,
+          domainCode: scenario.domain.code,
+          mode,
+          status: "SUCCESS",
+          ruleCount: rules.length,
+          findingsCount: findings.length,
+          extractedCount: extractedObjects.length,
+        }),
+      },
+    });
+
+    console.log(`[Run] 完成 run=${run.id} 规则=${rules.length} 命中=${findings.length}(err=${errorCount}/warn=${warnCount}) 抽取对象=${extractedObjects.length}`);
 
     return NextResponse.json({
       ...updated,
       findings,
-      extracted: extractedObjects.map(o => ({
+      extracted: extractedObjects.map((o, i) => ({
         ...o,
+        // createMany 不回填 id，这里用 runId+序号生成稳定唯一 id（前端用作 key）
+        id: o.id ?? `${run.id}#${i}`,
         jsonPayload: JSON.parse(o.jsonPayload),
       })),
       extractedCount: extractedObjects.length,
@@ -297,6 +348,23 @@ export async function POST(req: NextRequest) {
     await db.runRecord.update({
       where: { id: run.id },
       data: { status: "FAILED", error: e.message, finishedAt: new Date() },
+    });
+    // 运行失败审计
+    await db.auditLog.create({
+      data: {
+        actor: "web",
+        action: "RUN_FAILED",
+        entityType: "RunRecord",
+        entityId: run.id,
+        afterJson: JSON.stringify({
+          scenarioId,
+          scenarioName: scenario.name,
+          domainCode: scenario.domain.code,
+          mode,
+          status: "FAILED",
+          error: e.message,
+        }),
+      },
     });
     return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
   }
