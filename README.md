@@ -48,6 +48,12 @@ bun run dev
 
 打开 http://localhost:3000
 
+![img_2.png](example_docs/img_2.png)
+
+![img.png](example_docs/img.png)
+
+![img_1.png](example_docs/img_1.png)
+
 ### 首次启动凭据
 
 首次启动时自动初始化管理员账号和 API Key。**默认随机生成，打印在控制台日志里**（仅显示一次）：
