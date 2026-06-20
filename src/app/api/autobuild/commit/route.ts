@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import type { AutoBuildResult } from "@/lib/autoBuild";
+import { findIsolatedConcepts } from "@/lib/autoBuild";
 import { parseDsl } from "@/lib/dsl/parser";
 
 // POST /api/autobuild/commit - 把候选本体入库
@@ -62,18 +63,29 @@ export async function POST(req: NextRequest) {
   const relations = sel.relations ?? [];
   const rules = sel.rules ?? [];
   const scenarios = sel.scenarios ?? [];
+  const standards = sel.standards ?? [];
 
-  // 2. 创建概念（支持复用已存在的核心概念，避免 URI 冲突）
+  // 关系完整性校验：领域内所有概念必须连通，不允许孤立。
+  // 不相干的概念不该进同一领域；autoBuild 已尝试自愈重试，这里作最终兜底。
+  const isolated = findIsolatedConcepts(concepts, relations);
+  if (isolated.length > 0) {
+    return NextResponse.json({
+      ok: false,
+      error: `关系完整性校验失败：以下概念没有任何关系连接（孤立），请补关系或移除：${isolated.join("、")}`,
+      isolated,
+    }, { status: 400 });
+  }
+
+  // 2. 创建概念
+  // autoBuild 产出的概念一律 DOMAIN 作用域（ownerDomainId = 当前领域），
+  // 不再把 isCore 概念提升为 CORE——核心层只放固定的基础本体（Person/Organization/Money/Document），
+  // 领域概念通过 mapsToCore 建等价关系（owl:equivalentClass）链到基础概念，而非变成核心概念本身。
   const conceptIdMap = new Map<string, string>(); // localName → conceptId
   for (const c of concepts) {
     const linkedCoreId = linkToCore?.[c.localName] ?? null;
-    const uri = linkedCoreId
-      ? `${domain.code}:${c.localName}`
-      : c.isCore
-      ? `core:${c.localName}`
-      : `${domain.code}:${c.localName}`;
+    const uri = `${domain.code}:${c.localName}`;
 
-    // 若该 URI 的 Concept 已存在（常见：isCore 概念与已有核心概念同名），则复用，避免唯一约束冲突
+    // 若该 URI 的 Concept 已存在（同领域重建），则复用，避免唯一约束冲突
     let created = await db.concept.findUnique({ where: { uri } });
     if (!created) {
       created = await db.concept.create({
@@ -83,29 +95,37 @@ export async function POST(req: NextRequest) {
           labelEn: c.labelEn ?? null,
           description: c.description ?? null,
           type: "CLASS",
-          scope: c.isCore ? "CORE" : "DOMAIN",
+          scope: "DOMAIN",
           status: "PUBLISHED",
-          ownerDomainId: c.isCore ? null : domain.id,
+          ownerDomainId: domain.id,
           jsonSchema: JSON.stringify(c.fields ?? []),
           createdBy: "autobuild",
         },
       });
     }
 
-    // 如果显式链接到核心概念，补建等价关系（幂等：已存在则跳过）
-    if (linkedCoreId && linkedCoreId !== created.id) {
+    // 建立「领域概念 ↔ 基础核心概念」的等价关系（owl:equivalentClass）。
+    // 来源二选一：显式 linkToCore（UI 手动），或 autoBuild 的 mapsToCore（LLM 自动映射）。
+    // 这让核心概念被领域引用 → 图谱连通，不再孤立。幂等：已存在则跳过。
+    const coreLocalName = linkedCoreId ? null : (c.mapsToCore ?? null);
+    let coreConceptId: string | null = linkedCoreId ?? null;
+    if (!coreConceptId && coreLocalName) {
+      const coreConcept = await db.concept.findUnique({ where: { uri: `core:${coreLocalName}` } });
+      coreConceptId = coreConcept?.id ?? null;
+    }
+    if (coreConceptId && coreConceptId !== created.id) {
       const dup = await db.conceptEquivalence.findFirst({
-        where: { conceptAId: linkedCoreId, conceptBId: created.id },
+        where: { conceptAId: coreConceptId, conceptBId: created.id },
       });
       if (!dup) {
         await db.conceptEquivalence.create({
           data: {
-            conceptAId: linkedCoreId,
+            conceptAId: coreConceptId,
             conceptBId: created.id,
             equivalenceType: "EXACT",
             evidence: "AUTO_ALIAS",
             status: "PROPOSED",
-            note: `智能建库自动识别：${c.localName} 等同于已有核心概念`,
+            note: `智能建库自动映射：${c.localName} 等价于基础核心概念`,
           },
         });
       }
@@ -202,35 +222,52 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 6. 创建受治理标准（领域级，与规则集平级）
+  for (const s of standards) {
+    if (!s.code) continue; // 没有 code 的标准无意义（规则 call 不到）
+    // 幂等：同领域同 code 已存在则更新 matrix
+    await db.standard.upsert({
+      where: { domainId_code: { domainId: domain.id, code: s.code } },
+      update: { matrix: JSON.stringify(s.matrix ?? {}), description: s.description ?? null },
+      create: {
+        domainId: domain.id,
+        code: s.code,
+        matrix: JSON.stringify(s.matrix ?? {}),
+        description: s.description ?? null,
+      },
+    });
+  }
+
   await db.auditLog.create({
     data: {
       actor: "web",
       action: "AUTOBUILD",
       entityType: "Domain",
       entityId: domain.id,
-      afterJson: JSON.stringify({
-        // 完整快照（用户勾选的原始候选，而非仅数量）
-        selected: { concepts, relations, rules, scenarios },
-        counts: {
-          concepts: concepts.length,
-          relations: relations.length,
-          rules: rules.length,
-          scenarios: scenarios.length,
-        },
-        hasBuildSource: !!buildSource,
-      }),
-    },
-  });
+        afterJson: JSON.stringify({
+          // 完整快照（用户勾选的原始候选，而非仅数量）
+          selected: { concepts, relations, rules, scenarios, standards },
+          counts: {
+            concepts: concepts.length,
+            relations: relations.length,
+            rules: rules.length,
+            scenarios: scenarios.length,
+            standards: standards.length,
+          },
+          hasBuildSource: !!buildSource,
+        }),
+      },
+    });
 
   // 返回创建结果
   const updated = await db.domain.findUnique({
     where: { id: domain.id },
     include: {
-      _count: { select: { concepts: true, rulesets: true, scenarios: true } },
+      _count: { select: { concepts: true, rulesets: true, scenarios: true, standards: true } },
     },
   });
 
-  console.log(`[Commit] 领域=${domain.code}(${domain.id}) 入库 概念=${concepts.length} 关系=${relations.length} 规则=${rules.length} 场景=${scenarios.length}`);
+  console.log(`[Commit] 领域=${domain.code}(${domain.id}) 入库 概念=${concepts.length} 关系=${relations.length} 规则=${rules.length} 场景=${scenarios.length} 标准=${standards.length}`);
 
   return NextResponse.json({
     ok: true,
@@ -240,6 +277,7 @@ export async function POST(req: NextRequest) {
       relations: relations.length,
       rules: rules.length,
       scenarios: scenarios.length,
+      standards: standards.length,
     },
   }, { status: 201 });
 }

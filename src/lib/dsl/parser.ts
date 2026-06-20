@@ -432,7 +432,7 @@ function parseInlineExpr(s: string): Expr {
   // 数组
   if (s.startsWith("[") && s.endsWith("]")) {
     const inner = s.slice(1, -1).trim()
-    if (inner === "") return []
+    if (inner === "") return [] as any
     return inner.split(",").map(x => parseInlineExpr(x.trim())) as any
   }
   // 函数调用
@@ -555,12 +555,44 @@ export function evaluateWhen(
   if ("all" in w) return w.all.every(x => evaluateWhen(x, ctx, functions))
   if ("any" in w) return w.any.some(x => evaluateWhen(x, ctx, functions))
   if ("not" in w) return !evaluateWhen(w.not, ctx, functions)
-  if ("eq" in w) return deepEqual(evalExpr(w.eq[0], ctx, functions), evalExpr(w.eq[1], ctx, functions))
-  if ("ne" in w) return !deepEqual(evalExpr(w.ne[0], ctx, functions), evalExpr(w.ne[1], ctx, functions))
-  if ("gt" in w) return Number(evalExpr(w.gt[0], ctx, functions)) > Number(evalExpr(w.gt[1], ctx, functions))
-  if ("ge" in w) return Number(evalExpr(w.ge[0], ctx, functions)) >= Number(evalExpr(w.ge[1], ctx, functions))
-  if ("lt" in w) return Number(evalExpr(w.lt[0], ctx, functions)) < Number(evalExpr(w.lt[1], ctx, functions))
-  if ("le" in w) return Number(evalExpr(w.le[0], ctx, functions)) <= Number(evalExpr(w.le[1], ctx, functions))
+  // 比较语义：当路径侧解析为 undefined（字段不存在）时，比较结果一律为 false。
+  // 即「字段不存在」不等于「与某值不等」，避免整单无 invoiceType 时误命中 != 规则。
+  if ("eq" in w) {
+    const [lv, lmiss] = evalPathAware(w.eq[0], ctx, functions)
+    const [rv, rmiss] = evalPathAware(w.eq[1], ctx, functions)
+    if (lmiss || rmiss) return false
+    return deepEqual(lv, rv)
+  }
+  if ("ne" in w) {
+    const [lv, lmiss] = evalPathAware(w.ne[0], ctx, functions)
+    const [rv, rmiss] = evalPathAware(w.ne[1], ctx, functions)
+    if (lmiss || rmiss) return false
+    return !deepEqual(lv, rv)
+  }
+  if ("gt" in w) {
+    const [lv, lmiss] = evalPathAware(w.gt[0], ctx, functions)
+    const [rv, rmiss] = evalPathAware(w.gt[1], ctx, functions)
+    if (lmiss || rmiss) return false
+    return Number(lv) > Number(rv)
+  }
+  if ("ge" in w) {
+    const [lv, lmiss] = evalPathAware(w.ge[0], ctx, functions)
+    const [rv, rmiss] = evalPathAware(w.ge[1], ctx, functions)
+    if (lmiss || rmiss) return false
+    return Number(lv) >= Number(rv)
+  }
+  if ("lt" in w) {
+    const [lv, lmiss] = evalPathAware(w.lt[0], ctx, functions)
+    const [rv, rmiss] = evalPathAware(w.lt[1], ctx, functions)
+    if (lmiss || rmiss) return false
+    return Number(lv) < Number(rv)
+  }
+  if ("le" in w) {
+    const [lv, lmiss] = evalPathAware(w.le[0], ctx, functions)
+    const [rv, rmiss] = evalPathAware(w.le[1], ctx, functions)
+    if (lmiss || rmiss) return false
+    return Number(lv) <= Number(rv)
+  }
   if ("in" in w) {
     const v = evalExpr(w.in[0], ctx, functions)
     const arr = w.in[1].map(x => evalExpr(x, ctx, functions))
@@ -618,6 +650,41 @@ function evalExpr(e: Expr, ctx: any, functions: Record<string, (...args: any[]) 
     }
   }
   return e
+}
+
+/**
+ * 判断 Expr 是否是「路径表达式」（会从 ctx 取值，可能因字段不存在而 undefined）。
+ * 字面量、数字、布尔等不是路径，其值是确定的。
+ */
+function exprIsPath(e: Expr): boolean {
+  if (typeof e === "string") {
+    return /^[a-zA-Z_][\w.*\[\]]*$/.test(e) && !["true", "false", "null"].includes(e)
+  }
+  if (typeof e === "object" && e !== null) {
+    return "path" in e
+  }
+  return false
+}
+
+/**
+ * 带路径缺失感知的求值。返回 [value, pathMissing]：
+ * - 若 e 是路径且解析结果为 undefined，pathMissing=true（字段不存在）
+ * - 否则 pathMissing=false，value 为正常求值结果
+ *
+ * 用于比较运算（==/!=/>/< 等）：路径侧缺失时让比较返回 false，
+ * 避免「整单无 invoiceType」时 `invoiceType != "增值税专用发票"` 误判为 true。
+ */
+function evalPathAware(
+  e: Expr,
+  ctx: any,
+  functions: Record<string, (...args: any[]) => any>,
+): [any, boolean] {
+  if (exprIsPath(e)) {
+    const pathStr = typeof e === "string" ? e : (e as { path: string }).path
+    const v = resolvePath(pathStr, ctx)
+    return [v, v === undefined]
+  }
+  return [evalExpr(e, ctx, functions), false]
 }
 
 function resolvePath(path: string, ctx: any): any {
@@ -706,26 +773,18 @@ function compileWhenToShacl(w: WhenExpr, indent: string): string {
  * 内置受治理函数 - 用于 DSL 中的 call 表达式。
  * 实际平台应从 Function Registry 加载。
  */
+/**
+ * 通用内置函数 —— 领域无关的工具函数。
+ *
+ * 注意：受治理标准类函数（std_hotel_max / std_meal_max / entertainment_max 等）
+ * 不再写死在此处。它们按领域存成 Standard.matrix（受治理取值表），由
+ * validation-engine 在运行时加载并构建成同名函数注入 functions 注册表。
+ * 规则 DSL 里 call 到某个 std_xxx 时：
+ *   - 若该领域定义了对应 Standard → 按 call 参数下钻 matrix 取值；
+ *   - 若未定义 → 函数不存在，evalExpr 返回 undefined → 比较取 false（不误报）。
+ * 这样硬编码默认值不再掩盖「标准缺失/不匹配」的问题。
+ */
 export const builtinFunctions: Record<string, (...args: any[]) => any> = {
-  // 住宿标准：按城市+职级返回上限
-  std_hotel_max: (city: string, level: string) => {
-    const table: Record<string, Record<string, number>> = {
-      上海: { P5: 450, P6: 500, M1: 600, M2: 800, M3: 1000 },
-      北京: { P5: 450, P6: 500, M1: 600, M2: 800, M3: 1000 },
-      广州: { P5: 350, P6: 400, M1: 500, M2: 600, M3: 800 },
-      深圳: { P5: 350, P6: 400, M1: 500, M2: 600, M3: 800 },
-      苏州: { P5: 300, P6: 350, M1: 450, M2: 500, M3: 700 },
-    }
-    return table[city]?.[level] ?? 400
-  },
-  // 餐标
-  std_meal_max: (city: string) => {
-    return ["上海", "北京", "深圳", "广州"].includes(city) ? 100 : 80
-  },
-  // 招待费上限
-  entertainment_max: (level: string) => {
-    return { P5: 500, P6: 800, M1: 1500, M2: 2000, M3: 3000 }[level] ?? 500
-  },
   // 是否工作日
   is_workday: (dateStr: string) => {
     const d = new Date(dateStr)

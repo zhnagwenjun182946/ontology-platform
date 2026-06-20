@@ -288,7 +288,7 @@ function StepIndicator({ step }: { step: 1 | 2 | 3 }) {
 function ScenarioPicker({
   scenarios, loading, error, refetch, onSelect,
 }: {
-  scenarios?: Scenario[]
+  scenarios?: Scenario[] | null
   loading: boolean
   error: string | null
   refetch: () => void

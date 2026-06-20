@@ -3,7 +3,7 @@
 import * as React from 'react'
 import { toast } from 'sonner'
 import {
-  Boxes, Plus, Pencil, Trash2, RefreshCw, AlertCircle, Check, X,
+  Boxes, Plus, Pencil, Trash2, RefreshCw, AlertCircle, Check, X, Share2,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -24,6 +24,7 @@ import { api, domainColor } from './lib'
 import {
   LoadingState, ErrorState, EmptyState, PageHeader, SectionCard,
 } from './primitives'
+import { DomainConceptGraph, type DomainGraphNode, type DomainGraphEdge } from './DomainConceptGraph'
 
 interface Domain {
   id: string
@@ -57,6 +58,7 @@ export function DomainManager({ onNavigate }: { onNavigate: (k: 'concepts' | 'ru
   const [editing, setEditing] = React.useState<Domain | null>(null)
   const [creating, setCreating] = React.useState(false)
   const [deleting, setDeleting] = React.useState<Domain | null>(null)
+  const [graphDomain, setGraphDomain] = React.useState<Domain | null>(null)
 
   return (
     <div className="flex flex-col gap-4">
@@ -100,6 +102,7 @@ export function DomainManager({ onNavigate }: { onNavigate: (k: 'concepts' | 'ru
                 onViewConcepts={() => onNavigate('concepts')}
                 onViewRules={() => onNavigate('rules')}
                 onViewScenario={() => onNavigate('scenario')}
+                onViewGraph={() => setGraphDomain(d)}
               />
             )
           })}
@@ -145,11 +148,79 @@ export function DomainManager({ onNavigate }: { onNavigate: (k: 'concepts' | 'ru
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* 单领域图谱 */}
+      {graphDomain && (
+        <DomainGraphDialog domain={graphDomain} onClose={() => setGraphDomain(null)} />
+      )}
     </div>
   )
 }
 
-function DomainCard({ domain, dc, onEdit, onDelete, onViewConcepts, onViewRules, onViewScenario }: {
+/**
+ * 单领域概念关系图弹窗：拉取该领域的 concepts + relations，用 DomainConceptGraph 渲染。
+ */
+function DomainGraphDialog({ domain, onClose }: { domain: Domain; onClose: () => void }) {
+  const [nodes, setNodes] = React.useState<DomainGraphNode[]>([])
+  const [edges, setEdges] = React.useState<DomainGraphEdge[]>([])
+  const [loading, setLoading] = React.useState(true)
+  const [err, setErr] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    let alive = true
+    fetch(`/api/domains/${domain.id}`)
+      .then(r => r.json())
+      .then((detail: any) => {
+        if (!alive) return
+        // detail.concepts: [{ localName, concept?: {labelZh, ...} }]
+        // detail.relations: [{ name, relationType, sourceDomainConceptId, targetDomainConceptId }]
+        const idToLocalName = new Map<string, string>()
+        const conceptNodes: DomainGraphNode[] = []
+        for (const dc of detail.concepts ?? []) {
+          if (dc.linkedConceptId) idToLocalName.set(dc.linkedConceptId, dc.localName)
+          conceptNodes.push({ localName: dc.localName, labelZh: dc.concept?.labelZh ?? dc.localName })
+        }
+        const relEdges: DomainGraphEdge[] = (detail.relations ?? [])
+          .map((r: any) => ({
+            source: idToLocalName.get(r.sourceDomainConceptId) ?? '',
+            target: idToLocalName.get(r.targetDomainConceptId) ?? '',
+            relationType: r.relationType,
+            name: r.name,
+          }))
+          .filter((e: DomainGraphEdge) => e.source && e.target)
+        setNodes(conceptNodes)
+        setEdges(relEdges)
+        setLoading(false)
+      })
+      .catch((e: any) => { if (alive) { setErr(e.message); setLoading(false) } })
+    return () => { alive = false }
+  }, [domain.id])
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-5xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Share2 className="size-4 text-primary" />
+            「{domain.nameZh}」领域图谱
+          </DialogTitle>
+          <DialogDescription>该领域的概念与关系（单领域视图，非全局）</DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[70vh] overflow-auto">
+          {loading ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">加载中…</div>
+          ) : err ? (
+            <div className="py-12 text-center text-sm text-rose-500">加载失败：{err}</div>
+          ) : (
+            <DomainConceptGraph title="概念关系图" nodes={nodes} edges={edges} />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function DomainCard({ domain, dc, onEdit, onDelete, onViewConcepts, onViewRules, onViewScenario, onViewGraph }: {
   domain: Domain
   dc: ReturnType<typeof domainColor>
   onEdit: () => void
@@ -157,6 +228,7 @@ function DomainCard({ domain, dc, onEdit, onDelete, onViewConcepts, onViewRules,
   onViewConcepts: () => void
   onViewRules: () => void
   onViewScenario: () => void
+  onViewGraph: () => void
 }) {
   return (
     <div className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-sm transition-shadow hover:shadow-md">
@@ -214,6 +286,9 @@ function DomainCard({ domain, dc, onEdit, onDelete, onViewConcepts, onViewRules,
         </Button>
         <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={onViewScenario}>
           试运行
+        </Button>
+        <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={onViewGraph}>
+          <Share2 className="size-3" /> 图谱
         </Button>
       </div>
     </div>

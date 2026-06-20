@@ -18,7 +18,7 @@ export async function GET(_req: NextRequest) {
   for (const d of domains) {
     const set = new Set<string>();
     for (const dc of d.concepts) {
-      if (dc.linkedConceptId) {
+      if (dc.linkedConceptId && dc.concept) {
         set.add(dc.linkedConceptId);
         if (!conceptInfo.has(dc.linkedConceptId)) {
           conceptInfo.set(dc.linkedConceptId, {

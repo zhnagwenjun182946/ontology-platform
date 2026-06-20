@@ -19,8 +19,8 @@ export function logout() {
 }
 
 export function LoginPage() {
-  const [username, setUsername] = React.useState('admin')
-  const [password, setPassword] = React.useState('admin')
+  const [username, setUsername] = React.useState('')
+  const [password, setPassword] = React.useState('')
   const [loading, setLoading] = React.useState(false)
 
   const handleLogin = (e: React.FormEvent) => {
@@ -73,7 +73,7 @@ export function LoginPage() {
             {loading ? '登录中…' : '登录'}
           </Button>
           <p className="text-center text-[10px] text-muted-foreground">
-            默认账号 admin / admin，直接点击登录即可
+            首次启动凭据见控制台日志，或通过环境变量配置
           </p>
         </form>
       </div>

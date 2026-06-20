@@ -1,12 +1,18 @@
 {
-  "name": "nextjs_tailwind_shadcn_ts",
+  "name": "ontology-platform",
   "version": "0.2.0",
   "private": true,
+  "description": "业务规则智能校验平台 — 本体治理 + LLM 智能建库 + DSL 规则引擎",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",

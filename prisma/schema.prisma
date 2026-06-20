@@ -115,9 +115,33 @@ model Domain {
   relations     DomainRelation[]
   rulesets      RuleSet[]
   scenarios     Scenario[]
+  standards     Standard[]
   ownedConcepts Concept[]        @relation("OwnedConcepts")
 
   @@index([status])
+}
+
+/// 受治理标准（受治理函数的取值表）—— 领域无关的限额/标准数据
+/// 规则 DSL 里 `call: [std_hotel_max, city, level]` 这类受治理函数，
+/// 其取值不再写死在代码里，而是按领域存成 matrix（嵌套 JSON 查找表）。
+/// 调用时按 call 参数顺序逐层下钻 matrix 取叶子值；查不到返回 undefined
+/// → 比较取 false（不误报），避免硬编码默认值掩盖问题。
+model Standard {
+  id          String   @id @default(cuid())
+  domainId    String
+  /// 受治理函数名，与规则 DSL call[0] 一致（如 std_hotel_max）
+  code        String
+  /// 嵌套查找表 JSON：{ "北上广深": { "其他员工": 400, ... } }
+  /// 下钻顺序 = call 参数顺序：std_hotel_max(city, level) → matrix[city][level]
+  matrix      String   @default("{}")
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@unique([domainId, code])
+  @@index([domainId])
 }
 
 /// 领域内的概念（可能 link 到核心 Concept）

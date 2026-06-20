@@ -20,6 +20,12 @@ import { api, domainColor } from './lib'
 import {
   LoadingState, ErrorState, EmptyState, PageHeader, SectionCard,
 } from './primitives'
+import { DomainConceptGraph } from './DomainConceptGraph'
+import { findIsolatedConcepts } from '@/lib/autoBuild'
+import type {
+  CandidateConcept, CandidateRelation, CandidateRule,
+  CandidateScenario, CandidateStandard, AutoBuildResult,
+} from '@/lib/autoBuild'
 
 // ============ 类型 ============
 interface Domain {
@@ -27,50 +33,7 @@ interface Domain {
   code: string
   nameZh: string
   color?: string | null
-  _count: { concepts: number; rulesets: number; scenarios: number }
-}
-
-interface CandidateConcept {
-  localName: string
-  labelZh: string
-  labelEn?: string
-  description?: string
-  isCore?: boolean
-  fields: Array<{ name: string; type: string; required?: boolean; label?: string; ref?: string; itemRef?: string; enum?: string[] }>
-}
-
-interface CandidateRelation {
-  name: string
-  source: string
-  target: string
-  relationType: string
-  cardinality: string
-  description?: string
-}
-
-interface CandidateRule {
-  code: string
-  name: string
-  severity: string
-  target: string
-  targetPath?: string
-  dsl: string
-  message: string
-  explanation?: string
-  tags?: string[]
-}
-
-interface CandidateScenario {
-  code: string
-  name: string
-  description?: string
-}
-
-interface AutoBuildResult {
-  concepts: CandidateConcept[]
-  relations: CandidateRelation[]
-  rules: CandidateRule[]
-  scenarios: CandidateScenario[]
+  _count: { concepts: number; rulesets: number; scenarios: number; standards: number }
 }
 
 // ============ 主组件 ============
@@ -166,6 +129,7 @@ export function AutoBuildWizard({ onNavigateToRun, onNavigateToConcepts }: {
           relations: Array.from(selected.relations).map(i => result.relations[Number(i)]),
           rules: Array.from(selected.rules).map(i => result.rules[Number(i)]),
           scenarios: Array.from(selected.scenarios).map(i => result.scenarios[Number(i)]),
+          standards: result.standards ?? [],
         },
         // 回传建库来源，供 commit 留存到 Domain.rawMaterials / buildMeta
         buildSource: {
@@ -305,7 +269,7 @@ function Step1Domain({ domainMode, setDomainMode, existingDomainId, setExistingD
   setExistingDomainId: (s: string) => void
   newDomain: { code: string; nameZh: string; description: string; color: string }
   setNewDomain: React.Dispatch<React.SetStateAction<{ code: string; nameZh: string; description: string; color: string }>>
-  domains?: Domain[]
+  domains?: Domain[] | null
   onNext: () => void
 }) {
   return (
@@ -666,6 +630,23 @@ function Step3Review({ result, selected, setSelected, extractionMeta, onBack, on
           </ul>
         </SectionCard>
       )}
+
+      {/* 候选领域关系图（提交前预览：选中概念+关系，高亮孤立节点） */}
+      <DomainConceptGraph
+        title="候选领域关系图"
+        nodes={result.concepts
+          .map((c, i) => ({ idx: i, c }))
+          .filter(({ idx }) => selected.concepts.has(String(idx)))
+          .map(({ c }) => ({ localName: c.localName, labelZh: c.labelZh, mapsToCore: c.mapsToCore }))}
+        edges={result.relations
+          .map((r, i) => ({ idx: i, r }))
+          .filter(({ idx }) => selected.relations.has(String(idx)))
+          .map(({ r }) => ({ source: r.source, target: r.target, relationType: r.relationType, name: r.name }))}
+        isolatedWarning={findIsolatedConcepts(
+          result.concepts.filter((_, i) => selected.concepts.has(String(i))),
+          result.relations.filter((_, i) => selected.relations.has(String(i))),
+        )}
+      />
 
       <div className="flex items-center justify-between">
         <Button size="sm" variant="ghost" onClick={onBack} disabled={committing}>

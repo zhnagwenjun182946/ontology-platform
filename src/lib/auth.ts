@@ -2,7 +2,7 @@
  * API Key 鉴权工具 —— 供 /api/v1/ Agent 接口使用。
  *
  * 当前为预留实现：校验 API Key 是否存在于 DB，不做细粒度权限/租户隔离。
- * 默认 key: "ontology-platform-default-key"（由 seed 初始化）。
+ * 默认 key 由 seed 初始化（环境变量 DEFAULT_API_KEY 或随机生成，见启动日志）。
  */
 import { db } from "@/lib/db";
 

@@ -1,20 +1,20 @@
 # Agent API 接口文档（v1）
 
-> 智规平台为上游 Agent / 业务系统提供的 API 接口。所有接口需 API Key 鉴权。
+> 本体平台为上游 Agent / 业务系统提供的 API 接口。所有接口需 API Key 鉴权。
 
 ## 鉴权
 
 所有 `/api/v1/` 接口需要 API Key，通过以下任一方式传递：
 
 ```
-X-API-Key: ontology-platform-default-key
+X-API-Key: <your-api-key>
 ```
 或
 ```
-Authorization: Bearer ontology-platform-default-key
+Authorization: Bearer <your-api-key>
 ```
 
-> 默认 API Key：`ontology-platform-default-key`（生产环境请替换）
+> API Key 在首次启动时自动生成（见控制台日志），或通过环境变量 `DEFAULT_API_KEY` 设置。
 
 ---
 

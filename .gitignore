@@ -52,3 +52,17 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Prisma SQLite DB（本地数据，不入库）
+prisma/db/*.db
+prisma/db/*.db-journal

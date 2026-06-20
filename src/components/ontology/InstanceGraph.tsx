@@ -6,6 +6,7 @@ import { ZoomIn, ZoomOut, Maximize2, AlertTriangle, Boxes, Info } from 'lucide-r
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { fieldToConceptName, isDetailConceptResolved } from '@/lib/concept-field'
 
 import { useFetch } from './hooks'
 import {
@@ -98,36 +99,25 @@ const INSTANCE_GAP = 46      // 同簇内实例间距
 
 // ============ 工具：从实例 payload 取可读标识 ============
 
-// 每种概念的"自身业务标识"字段优先级（不含嵌套 ref 的 name，避免关联人名污染）
-const LABEL_FIELDS: Record<string, string[]> = {
-  Employee: ['name', 'id'],
-  Loan: ['loanId'],
-  TravelRequest: ['id'],
-  ExpenseReport: ['id'],
-  ProcurementRequest: ['id'],
-  Supplier: ['name', 'id'],
-  Buyer: ['name', 'id'],
-  CostCenter: ['name', 'id'],
-}
+// 实例可读标识的字段优先级（领域无关）：name 直接作主标识（如人名），
+// 其余标识类字段（id/number/code/loanId）用「概念中文名 + 值」更可读。
+// 不再按概念名硬编码字段优先级，任意领域概念都走同一优先级。
+const IDENTITY_FIELD_PRIORITY = ['name', 'id', 'number', 'code', 'loanId']
 
 function pickInstanceLabel(label: string, conceptLabelZh: string | undefined, payload: any, index: number): { label: string; subLabel?: string } {
   if (!payload || typeof payload !== 'object') {
     return { label: `${conceptLabelZh || label}#${index + 1}` }
   }
 
-  // 按概念类型的字段优先级取自身标识
-  const fields = LABEL_FIELDS[label]
-  if (fields) {
-    for (const f of fields) {
-      const v = payload[f]
-      if (v != null && v !== '') {
-        // 主标识：若是 name（人名），直接用；若是编号类，加概念中文名前缀更可读
-        const isName = f === 'name'
-        const main = isName ? String(v) : `${conceptLabelZh || label} ${v}`
-        const sub = fields.find(f2 => f2 !== f && payload[f2] != null && payload[f2] !== '')
-        return { label: main, subLabel: sub ? String(payload[sub]) : undefined }
-      }
-    }
+  // 按优先级取有值的标识字段
+  const present = IDENTITY_FIELD_PRIORITY.filter(f => payload[f] != null && payload[f] !== '')
+  if (present.length > 0) {
+    const f = present[0]
+    const v = payload[f]
+    const isName = f === 'name'
+    const main = isName ? String(v) : `${conceptLabelZh || label} ${v}`
+    const sub = present.find(f2 => f2 !== f)
+    return { label: main, subLabel: sub ? String(payload[sub]) : undefined }
   }
 
   // 通用：顶层 name（人名直接用）
@@ -141,6 +131,10 @@ function pickInstanceLabel(label: string, conceptLabelZh: string | undefined, pa
   }
   if (payload.type) {
     return { label: payload.type, subLabel: conceptLabelZh || label }
+  }
+  // 费用类通用兜底：有金额无类型时，用"概念中文名 ¥金额"（如 住宿费 ¥500）
+  if (payload.amount != null) {
+    return { label: `${conceptLabelZh || label} ¥${payload.amount}`, subLabel: undefined }
   }
 
   // 最终 fallback：概念中文名 + 序号
@@ -181,6 +175,22 @@ function collectRefValues(payload: any, prefix = ''): Array<{ field: string; val
   return out
 }
 
+// 从 domainDetail 推导「明细概念 localName 集合」：CONTAINS 关系的 target。
+// 比按名字猜可靠，不受 LLM 命名差异（Fee/Expense/Cost）影响。
+function buildDetailLocalNames(domainDetail: DomainDetail | null): Set<string> {
+  const conceptIdToLocalName = new Map<string, string>()
+  for (const dc of domainDetail?.concepts ?? []) {
+    if (dc.linkedConceptId) conceptIdToLocalName.set(dc.linkedConceptId, dc.localName)
+  }
+  const set = new Set<string>()
+  for (const rel of domainDetail?.relations ?? []) {
+    if (rel.relationType !== 'CONTAINS') continue
+    const target = conceptIdToLocalName.get(rel.targetDomainConceptId)
+    if (target) set.add(target)
+  }
+  return set
+}
+
 // ============ 概念元信息匹配 ============
 
 function buildConceptIndex(concepts: ConceptLite[]) {
@@ -209,6 +219,7 @@ function lookupConcept(
 function mapFindingsToNodes(
   nodes: GraphNode[],
   findings: InstanceFinding[],
+  detailSet: Set<string>,
 ): { globalFindings: InstanceFinding[] } {
   const globalFindings: InstanceFinding[] = []
 
@@ -219,21 +230,22 @@ function mapFindingsToNodes(
     byLabel.get(n.conceptLabel)!.push(n)
   }
 
-  // 主单据节点候选（Loan/ExpenseReport/ProcurementRequest）
-  const mainLabels = ['Loan', 'ExpenseReport', 'ProcurementRequest']
-  const mainNodes = nodes.filter(n => mainLabels.includes(n.conceptLabel))
+  // 主单据节点候选（领域无关：非明细概念即主单据）
+  const mainNodes = nodes.filter(n => !isDetailConceptResolved(n.conceptLabel, detailSet))
 
   for (const f of findings) {
     const tp = f.targetPath
     let matched = false
 
     if (tp) {
-      // lines[N] / items[N] 形式
-      const m = tp.match(/^(lines|items)\[(\d+)\]$/)
+      // lines[N] / items[N] / accommodationFees[N] 等任意 <field>[N] 形式（领域无关）
+      const m = tp.match(/^(\w+)\[(\d+)\]$/)
       if (m) {
-        const groupLabel = m[1] === 'lines' ? 'ExpenseItem' : 'ProcurementItem'
+        const field = m[1]
         const idx = parseInt(m[2], 10)
-        const group = byLabel.get(groupLabel) || []
+        // 该字段对应的节点组：按概念名匹配（field→ConceptName，再查 byLabel）
+        const groupLabel = fieldToConceptName(field)
+        const group = byLabel.get(groupLabel) || byLabel.get(field) || []
         if (idx < group.length) {
           // contextJson 内容比对兜底：若 contextJson 与某节点 payload 序列化一致，优先用它
           let target = group[idx]
@@ -361,22 +373,55 @@ function buildEdges(
   return { edges, seen }
 }
 
-// 明细行（ExpenseItem/ProcurementItem）自动挂到父单据：
-// 因为 LLM 抽取时明细行通常不带 expenseReportId 等外键，
-// 这里按"明细行 → 父单据"的归属关系补连线。
-function attachDetailToParent(nodes: GraphNode[], edges: GraphEdge[], seen: Set<string>) {
-  const detailLabels = ['ExpenseItem', 'ProcurementItem']
-  const mainLabels = ['ExpenseReport', 'ProcurementRequest', 'Loan']
-  const details = nodes.filter(n => detailLabels.includes(n.conceptLabel))
-  const mains = nodes.filter(n => mainLabels.includes(n.conceptLabel))
-  if (details.length === 0 || mains.length === 0) return
-  // 默认挂到第一个主单据（一次运行通常只有一个主单据）
-  const parent = mains[0]
-  for (const d of details) {
+// 明细行自动挂到父单据（领域无关）：
+// LLM 抽取时明细行通常不带外键，这里按"明细行 → 父单据"补连线。
+// 父单据 = DomainRelation 里 CONTAINS 该明细概念的主概念（如 TravelRequest CONTAINS AccommodationFee）；
+// 找不到 CONTAINS 关系时，回退挂到第一个主单据（非明细概念）节点。
+function attachDetailToParent(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  seen: Set<string>,
+  domainDetail: DomainDetail | null,
+  detailSet: Set<string>,
+) {
+  // linkedConceptId(Concept.id) → localName（即节点 conceptLabel）
+  const conceptIdToLocalName = new Map<string, string>()
+  for (const dc of domainDetail?.concepts ?? []) {
+    if (dc.linkedConceptId) conceptIdToLocalName.set(dc.linkedConceptId, dc.localName)
+  }
+  // 明细概念 localName → 其容器主概念 localName（按 CONTAINS 关系）
+  const detailToContainer = new Map<string, string>()
+  for (const rel of domainDetail?.relations ?? []) {
+    if (rel.relationType !== 'CONTAINS') continue
+    const source = conceptIdToLocalName.get(rel.sourceDomainConceptId)
+    const target = conceptIdToLocalName.get(rel.targetDomainConceptId)
+    if (source && target) detailToContainer.set(target, source)
+  }
+
+  // 主单据节点（非明细概念）—— CONTAINS 找不到时的回退父节点
+  const mains = nodes.filter(n => !isDetailConceptResolved(n.conceptLabel, detailSet))
+  if (mains.length === 0 && detailToContainer.size === 0) return
+
+  const addEdge = (d: GraphNode, parent: GraphNode) => {
     const key = `${d.id}->${parent.id}:归属`
-    if (seen.has(key)) continue
+    if (seen.has(key)) return
     seen.add(key)
     edges.push({ from: parent.id, to: d.id, label: '包含' })
+  }
+
+  for (const d of nodes) {
+    if (!isDetailConceptResolved(d.conceptLabel, detailSet)) continue // 只挂明细到主单据
+    // 优先按 CONTAINS 关系找该明细的容器
+    const containerLabel = detailToContainer.get(d.conceptLabel)
+    const parent = containerLabel
+      ? nodes.find(n => n.conceptLabel === containerLabel)
+      : undefined
+    if (parent) {
+      addEdge(d, parent)
+    } else if (mains.length > 0) {
+      // 回退：挂到第一个主单据
+      addEdge(d, mains[0])
+    }
   }
 }
 
@@ -389,6 +434,7 @@ function buildInstanceGraph(
   domainDetail: DomainDetail | null,
 ): { nodes: GraphNode[]; edges: GraphEdge[]; globalFindings: InstanceFinding[]; layoutNodes: LayoutNode[]; layoutEdges: LayoutEdge[] } {
   const cidx = buildConceptIndex(concepts)
+  const detailSet = buildDetailLocalNames(domainDetail)
   const nodes: GraphNode[] = []
   const layoutNodes: LayoutNode[] = []
 
@@ -422,13 +468,12 @@ function buildInstanceGraph(
         y: 0,
         violations: [],
       })
-      // 主单据概念作为中心节点（radial 布局用）
-      const mainLabels = ['Loan', 'ExpenseReport', 'ProcurementRequest']
+      // 主单据概念作为中心节点（radial 布局用）；领域无关：非明细即主单据
       layoutNodes.push({
         id: e.id,
         label: dispLabel,
         group: label,
-        isCenter: mainLabels.includes(label),
+        isCenter: !isDetailConceptResolved(label, detailSet),
       })
     })
   })
@@ -441,10 +486,10 @@ function buildInstanceGraph(
     domainDetail?.concepts ?? [],
   )
   // 明细行自动挂到父单据（补 LLM 抽取丢失的归属外键）
-  attachDetailToParent(nodes, edges, seen)
+  attachDetailToParent(nodes, edges, seen, domainDetail, detailSet)
 
   // 违规映射
-  const { globalFindings } = mapFindingsToNodes(nodes, findings)
+  const { globalFindings } = mapFindingsToNodes(nodes, findings, detailSet)
 
   const layoutEdges: LayoutEdge[] = edges.map(e => ({ from: e.from, to: e.to }))
   return { nodes, edges, globalFindings, layoutNodes, layoutEdges }

@@ -73,7 +73,7 @@ export function computeLayout(
 // ============ dagre 分层布局 ============
 
 function dagreLayout(nodes: LayoutNode[], edges: LayoutEdge[]): PositionedNode[] {
-  const g = new dagre.graphlib.Graph<{}>()
+  const g = new dagre.graphlib.Graph<Record<string, unknown>>()
   g.setGraph({
     rankdir: 'TB',
     nodesep: 80,

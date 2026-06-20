@@ -5,6 +5,12 @@
  * DeepSeek API 兼容 OpenAI Chat Completions 格式。
  */
 
+import {
+  conceptToSingularField,
+  conceptToPluralField,
+  isDetailConceptResolved,
+} from "@/lib/concept-field";
+
 const API_KEY = process.env.DEEPSEEK_API_KEY || "";
 const BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1";
 const MODEL = process.env.DEEPSEEK_MODEL || "deepseek-v4-pro";
@@ -48,14 +54,15 @@ export async function chat(
     body: JSON.stringify(body),
   });
 
-  const durationMs = Date.now() - start;
-
   if (!res.ok) {
     const errText = await res.text();
     throw new Error(`DeepSeek API ${res.status}: ${errText.slice(0, 500)}`);
   }
 
   const json = await res.json();
+  // 注意：耗时要在读完响应体之后再算——推理模型会流式输出大量内容，
+  // 头部很快返回但 body 读取可能耗时很久，在 fetch 之后立即计时会严重偏低。
+  const durationMs = Date.now() - start;
   const text = json.choices?.[0]?.message?.content ?? "";
   const u = json.usage;
   // 业务日志：记录 LLM 调用耗时、token 消耗（含 reasoning_tokens 诊断）
@@ -132,66 +139,6 @@ export async function extractStructured(
 }
 
 /**
- * 生成报销领域的 schema 提示词。
- * 后续可以从 Concept.jsonSchema 自动生成，这里硬编码报销场景。
- */
-export function buildReimbursementSchemaPrompt(): string {
-  return `{
-  "id": "string, 报销单号",
-  "submitter": {
-    "id": "string, 工号",
-    "name": "string, 姓名",
-    "level": "string, 职级，必须是 P5/P6/M1/M2/M3 之一",
-    "department": "string, 所属部门（可选）"
-  },
-  "costCenter": {
-    "id": "string, 成本中心编码",
-    "name": "string, 成本中心名称"
-  },
-  "totalAmount": "number, 报销总金额（如果材料没有明说，等于所有 lines.amount 之和）",
-  "employee": { "level": "string, 同 submitter.level，用于规则校验" },
-  "lines": [
-    {
-      "type": "string, 费用类型，必须是 住宿/餐饮/交通/办公/招待/其他 之一",
-      "amount": "number, 金额",
-      "city": "string, 城市（住宿/差旅必填）",
-      "date": "string, 发生日期 YYYY-MM-DD（可选）",
-      "invoice": { "number": "string, 发票号", "amount": "number, 发票金额" },
-      "customer": "string, 客户名称（招待必填，没有则 null）",
-      "project": "string, 项目名称（可选）"
-    }
-  ]
-}`;
-}
-
-/**
- * 采购场景 schema 提示词
- */
-export function buildProcurementSchemaPrompt(): string {
-  return `{
-  "id": "string, 采购单号",
-  "buyer": {
-    "id": "string, 采购员工号",
-    "name": "string, 姓名"
-  },
-  "supplier": {
-    "id": "string, 供应商编码",
-    "name": "string, 供应商名称",
-    "creditCode": "string, 统一社会信用代码（可选）"
-  },
-  "items": [
-    {
-      "name": "string, 物料/服务名称",
-      "quantity": "number, 数量",
-      "unitPrice": "number, 单价",
-      "amount": "number, 金额"
-    }
-  ],
-  "totalAmount": "number, 采购总金额"
-}`;
-}
-
-/**
  * 领域概念字段定义（与 Concept.jsonSchema 对应）
  */
 export interface ConceptField {
@@ -212,24 +159,25 @@ export interface DomainConceptSchema {
 }
 
 /**
- * 从领域 Concept 的 jsonSchema 自动生成抽取提示词，替代硬编码的报销/采购 schema。
+ * 从领域 Concept 的 jsonSchema 自动生成抽取提示词。
  *
- * 生成策略：
- * - 把每个概念的字段按 {字段名: "type, 说明"} 形式列出；
- * - ref 字段展开为嵌套对象（如 borrower: { id, name }）；
- * - 要求 LLM 把材料抽取成一个"主单据"对象，其中：
- *   · 主单据包含所有非明细概念的内联字段；
- *   · 明细类概念（名字含 Item/Line/Detail）放入 lines 数组；
- *   · 借款类概念（Loan）作为顶层 loan 字段；
- * - 这样规则引擎按 lines[*] / loan.* 等路径就能取到值。
+ * 输出结构约定（与 validation-engine 实体抽取、规则 targetPath 闭环）：
+ *   - 顶层每个概念一个字段，字段名 = 概念名转字段名：
+ *       主概念（非明细）→ 单数字段（Employee → employee），值为对象或 null
+ *       明细概念 → 复数字段（AccommodationFee → accommodationFees），值为数组
+ *   - 这样多条主概念不会互相覆盖（旧实现把主概念字段平铺到顶层，
+ *     Employee.id 与 TravelRequest.id 会产生重复 id 字段）。
+ *   - 规则里 `travelRequest.applicant.level`、`accommodationFees[*]` 等路径
+ *     与抽取字段名一一对应。
  */
 export function buildSchemaPromptFromDomain(
   domainName: string,
   concepts: DomainConceptSchema[],
+  detailSet?: Set<string>,
 ): string {
   const lines: string[] = [];
   lines.push(`领域：${domainName}`);
-  lines.push("从业务材料中抽取一个 JSON 对象，需包含以下概念的字段：");
+  lines.push("从业务材料中抽取一个 JSON 对象，顶层每个概念对应一个字段。");
   lines.push("");
 
   // 概念字段说明
@@ -244,45 +192,42 @@ export function buildSchemaPromptFromDomain(
     lines.push("");
   }
 
-  // 区分明细概念与主/单据概念
-  const detailNames = ["item", "line", "detail"];
-  const isDetail = (c: DomainConceptSchema) =>
-    detailNames.some((k) => c.localName.toLowerCase().includes(k));
-  const detailConcepts = concepts.filter(isDetail);
-  const mainConcepts = concepts.filter((c) => !isDetail(c));
+  // 明细集合：优先用关系推导（detailSet），无则按名字兜底
+  const resolvedDetailSet = detailSet ?? new Set<string>();
 
   lines.push("输出 JSON 结构要求：");
   lines.push("- 返回单个 JSON 对象（不要数组包裹）。");
-  // 主单据字段：把所有主概念的字段平铺到顶层
-  const mainFields: string[] = [];
-  for (const c of mainConcepts) {
-    for (const f of c.fields) {
-      if (f.type === "ref") {
-        // ref 字段展开为嵌套对象
-        mainFields.push(`"${f.name}": { "id": "string", "name": "string" }  // ${f.label ?? ""}`);
-      } else {
-        mainFields.push(`"${f.name}": "${f.type}"  // ${f.label ?? ""}`);
-      }
-    }
-  }
-  lines.push("- 顶层对象包含以下字段：");
-  for (const mf of mainFields) lines.push(`    ${mf}`);
+  lines.push("- 顶层每个概念一个字段，字段名与结构如下：");
 
-  // 明细数组
-  if (detailConcepts.length > 0) {
-    const dc = detailConcepts[0];
-    lines.push(`- 把每一条${dc.labelZh}放入 "lines" 数组，每个元素结构：`);
-    for (const f of dc.fields) {
-      if (f.type === "ref") {
-        lines.push(`    "${f.name}": { "number": "string", "amount": "number" }  // ${f.label ?? ""}`);
-      } else {
-        const enumStr = f.enum?.length ? `，枚举 [${f.enum.join(", ")}]` : "";
-        lines.push(`    "${f.name}": "${f.type}"  // ${f.label ?? ""}${enumStr}`);
-      }
+  for (const c of concepts) {
+    const isDetail = isDetailConceptResolved(c.localName, resolvedDetailSet);
+    const field = isDetail
+      ? conceptToPluralField(c.localName)
+      : conceptToSingularField(c.localName);
+    const fieldBlock = renderConceptFields(c.fields);
+    if (isDetail) {
+      lines.push(`    "${field}": [ {`);
+      lines.push(...fieldBlock.map((l) => `      ${l}`));
+      lines.push(`    } ]  // ${c.labelZh}；没有该类费用用空数组 []，不要省略字段`);
+    } else {
+      lines.push(`    "${field}": {`);
+      lines.push(...fieldBlock.map((l) => `      ${l}`));
+      lines.push(`    }  // ${c.labelZh}；材料里没有则 null`);
     }
   }
 
   lines.push("");
   lines.push("注意：字段缺失用 null，金额用 number，日期用 YYYY-MM-DD 字符串。不要编造材料里没有的数据。");
   return lines.join("\n");
+}
+
+/** 渲染单个概念的内部字段块（不含外层 { }）。 */
+function renderConceptFields(fields: ConceptField[]): string[] {
+  return fields.map((f) => {
+    if (f.type === "ref") {
+      return `"${f.name}": { "id": "string", "name": "string" },  // ${f.label ?? ""}`;
+    }
+    const enumStr = f.enum?.length ? `，枚举 [${f.enum.join(", ")}]` : "";
+    return `"${f.name}": "${f.type}",  // ${f.label ?? ""}${enumStr}`;
+  });
 }

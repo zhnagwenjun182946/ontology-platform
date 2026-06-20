@@ -36,6 +36,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     let pending = 0;
     for (const oc of otherConcepts) {
       if (!oc.linkedConceptId) continue;
+      if (!oc.concept) continue;
       if (myConceptIds.has(oc.linkedConceptId)) {
         shared.push({ id: oc.concept.id, label: oc.concept.labelZh, uri: oc.concept.uri });
       }
