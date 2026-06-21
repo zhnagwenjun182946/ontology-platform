@@ -50,7 +50,15 @@ bun run dev
 
 ![img_2.png](example_docs/img_2.png)
 
-![img.png](example_docs/img.png)
+![img_5.png](example_docs/img_6.png)
+
+![img_1.png](example_docs/img_5.png)
+
+![img_3.png](example_docs/img_3.png)
+
+![img_4.png](example_docs/img_4.png)
+
+![img.png](example_docs/img_7.png)
 
 ![img_1.png](example_docs/img_1.png)
 
