@@ -1,7 +1,8 @@
 'use client'
 
 import * as React from 'react'
-import { ZoomIn, ZoomOut, Maximize2, AlertTriangle, Boxes, Info } from 'lucide-react'
+import { ZoomIn, ZoomOut, Maximize2, AlertTriangle, Boxes, Info, X } from 'lucide-react'
+import { TransformWrapper, TransformComponent, type ReactZoomPanPinchRef } from 'react-zoom-pan-pinch'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -534,13 +535,14 @@ export function InstanceGraph({ extracted, findings, domainCode, height = 'full'
   const loading = conceptsResp.loading || domainsResp.loading
 
   const [selected, setSelected] = React.useState<string | null>(null)
-  const [zoom, setZoom] = React.useState(1)
   const [hovered, setHovered] = React.useState<string | null>(null)
   const [layoutKind, setLayoutKind] = React.useState<LayoutKind>('hierarchy')
+  const [fullscreen, setFullscreen] = React.useState(false)
   // 节点拖动：id → {x, y} 覆盖坐标
   const [dragOverride, setDragOverride] = React.useState<Map<string, { x: number; y: number }>>(new Map())
   const dragRef = React.useRef<{ id: string; offsetX: number; offsetY: number } | null>(null)
   const svgRef = React.useRef<SVGSVGElement | null>(null)
+  const transformRef = React.useRef<ReactZoomPanPinchRef | null>(null)
 
   // 切换布局时清空拖动覆盖
   React.useEffect(() => {
@@ -608,6 +610,104 @@ export function InstanceGraph({ extracted, findings, domainCode, height = 'full'
   const hoveredNode = hovered ? graph.nodes.find(n => n.id === hovered) : null
   const violatedCount = graph.nodes.filter(n => n.violations.length > 0).length
 
+  // SVG 图谱元素（普通视图与全屏覆盖层共用，避免重复 DOM）
+  const instanceSvg = (
+    <svg
+      ref={svgRef}
+      viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+      className="select-none"
+      style={isThumb ? { height: svgHeight, width: '100%' } : { minWidth: VIEW_W, minHeight: VIEW_H }}
+      onMouseMove={!isThumb ? handleMouseMove : undefined}
+      onMouseUp={!isThumb ? handleMouseUp : undefined}
+      onMouseLeave={!isThumb ? handleMouseUp : undefined}
+      role="img"
+      aria-label="抽取实例关系图谱"
+    >
+      <defs>
+        <marker id="ig-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L0,6 L9,3 z" fill="#94a3b8" />
+        </marker>
+        <marker id="ig-arrow-violation" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L0,6 L9,3 z" fill="#f43f5e" />
+        </marker>
+      </defs>
+      {graph.edges.map((e, i) => {
+        const from = graph.nodes.find(n => n.id === e.from)
+        const to = graph.nodes.find(n => n.id === e.to)
+        if (!from || !to) return null
+        const fromOv = dragOverride.get(e.from)
+        const toOv = dragOverride.get(e.to)
+        const fx = fromOv?.x ?? from.x
+        const fy = fromOv?.y ?? from.y
+        const tx = toOv?.x ?? to.x
+        const ty = toOv?.y ?? to.y
+        const hasViolation = from.violations.length > 0 || to.violations.length > 0
+        const stroke = hasViolation ? '#f43f5e' : '#94a3b8'
+        const samePairIdx = graph.edges.filter(e2 =>
+          (e2.from === e.from && e2.to === e.to) || (e2.from === e.to && e2.to === e.from)
+        ).indexOf(e)
+        const r = 16
+        const { path, midX, midY } = curvePath(fx, fy, tx, ty, r, samePairIdx)
+        return (
+          <g key={i}>
+            <path d={path} fill="none" stroke={stroke} strokeWidth={hasViolation ? 2 : 1.5}
+              markerEnd={hasViolation ? 'url(#ig-arrow-violation)' : 'url(#ig-arrow)'} opacity={0.75} />
+            {e.label && !isThumb && (
+              <text x={midX} y={midY} textAnchor="middle" dominantBaseline="middle" fontSize="9"
+                fill={hasViolation ? '#f43f5e' : '#64748b'} className="pointer-events-none select-none"
+                style={{ paintOrder: 'stroke', stroke: 'white', strokeWidth: 3, strokeLinejoin: 'round' }}>
+                {e.label}
+              </text>
+            )}
+          </g>
+        )
+      })}
+      {graph.nodes.map(n => {
+        const hasViolation = n.violations.length > 0
+        const hex = n.scope === 'CORE' ? '#0f172a' : domainHex(n.domainCode)
+        const isSelected = n.id === selected
+        const isHovered = n.id === hovered
+        const r = 16
+        const ov = dragOverride.get(n.id)
+        const nx = ov?.x ?? n.x
+        const ny = ov?.y ?? n.y
+        return (
+          <g key={n.id} transform={`translate(${nx},${ny})`}
+            className={cn(!isThumb && 'cursor-grab active:cursor-grabbing transition-all')}
+            onMouseDown={!isThumb ? (ev) => handleNodeMouseDown(ev, n.id) : undefined}
+            onClick={(ev) => { if (isThumb) return; ev.stopPropagation(); setSelected(n.id) }}
+            onMouseEnter={() => !isThumb && setHovered(n.id)}
+            onMouseLeave={() => !isThumb && setHovered(null)}>
+            {(isSelected || isHovered) && (
+              <circle r={r + 5} fill="none" stroke={hasViolation ? '#f43f5e' : hex} strokeWidth="1.5" opacity="0.4" strokeDasharray="2,2" />
+            )}
+            <circle r={r} fill={hasViolation ? '#fee2e2' : (n.scope === 'CORE' ? 'white' : hex)}
+              stroke={hasViolation ? '#f43f5e' : hex} strokeWidth={hasViolation ? 2.5 : 1.5} />
+            <text y={r + 13} textAnchor="middle" className="pointer-events-none select-none"
+              fontSize={isThumb ? 9 : 11} fontWeight="500" style={{ fill: 'var(--foreground)' }}>
+              {n.label.length > 8 ? n.label.slice(0, 7) + '…' : n.label}
+            </text>
+            {n.subLabel && !isThumb && (
+              <text y={r + 25} textAnchor="middle" className="pointer-events-none select-none" fontSize="9" fill="#94a3b8">{n.subLabel}</text>
+            )}
+            {hasViolation && (
+              <g transform={`translate(${r - 2},${-r + 2})`}>
+                <circle r="7" fill="#f43f5e" />
+                <text textAnchor="middle" dominantBaseline="middle" fontSize="9" fontWeight="700" fill="white" className="pointer-events-none select-none">!</text>
+              </g>
+            )}
+          </g>
+        )
+      })}
+    </svg>
+  )
+
+  const statsBadge = (
+    <div className="pointer-events-none absolute bottom-2 right-3 rounded-md bg-white/80 px-2 py-1 text-[10px] text-muted-foreground backdrop-blur dark:bg-slate-900/80">
+      {graph.nodes.length} 实体 · {graph.edges.length} 关系{violatedCount > 0 ? ` · ${violatedCount} 违规` : ''}
+    </div>
+  )
+
   return (
     <div className={cn('flex flex-col gap-3', isThumb && 'gap-2')}>
       {/* 全局违规提示条 */}
@@ -624,158 +724,51 @@ export function InstanceGraph({ extracted, findings, domainCode, height = 'full'
       )}
 
       <div className={cn('grid gap-3', isThumb ? 'grid-cols-1' : 'lg:grid-cols-[minmax(0,1fr)_300px]')}>
+        {/* 全屏覆盖层（非缩略图） */}
+        {!isThumb && fullscreen && (
+          <div className="fixed inset-0 z-50 flex flex-col gap-2 bg-background p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <select value={layoutKind} onChange={(e) => setLayoutKind(e.target.value as LayoutKind)}
+                  className="h-8 rounded-md border bg-background px-2 text-xs text-foreground" aria-label="切换布局">
+                  <option value="hierarchy">{layoutLabel('hierarchy')}</option>
+                  <option value="force">{layoutLabel('force')}</option>
+                  <option value="radial">{layoutLabel('radial')}</option>
+                </select>
+                <Button size="sm" variant="outline" onClick={() => transformRef.current?.zoomOut()} aria-label="缩小"><ZoomOut className="size-3.5" /></Button>
+                <Button size="sm" variant="outline" onClick={() => transformRef.current?.zoomIn()} aria-label="放大"><ZoomIn className="size-3.5" /></Button>
+                <Button size="sm" variant="outline" onClick={() => transformRef.current?.resetTransform()} aria-label="重置"><span className="text-[10px]">100%</span></Button>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => { setFullscreen(false); transformRef.current?.resetTransform() }} aria-label="退出全屏">
+                <X className="size-3.5" /> 退出全屏
+              </Button>
+            </div>
+            <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-gradient-to-br from-slate-50 to-white dark:from-slate-900/50 dark:to-slate-900/30">
+              <TransformWrapper ref={transformRef} minScale={0.2} maxScale={4} centerOnInit limitToBounds={false}>
+                <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full">
+                  {instanceSvg}
+                </TransformComponent>
+              </TransformWrapper>
+              {statsBadge}
+            </div>
+          </div>
+        )}
         {/* SVG 图谱 */}
         <div
           className={cn(
-            'relative min-w-0 overflow-auto rounded-lg bg-gradient-to-br from-slate-50 to-white p-2 dark:from-slate-900/50 dark:to-slate-900/30 scrollbar-thin',
+            'relative min-w-0 overflow-hidden rounded-lg bg-gradient-to-br from-slate-50 to-white dark:from-slate-900/50 dark:to-slate-900/30',
             isThumb ? `h-[${svgHeight}px]` : 'h-[640px]',
             isThumb && 'cursor-zoom-in',
           )}
           onClick={isThumb && onExpand ? onExpand : undefined}
         >
-          <svg
-            ref={svgRef}
-            viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-            onMouseMove={!isThumb ? handleMouseMove : undefined}
-            onMouseUp={!isThumb ? handleMouseUp : undefined}
-            onMouseLeave={!isThumb ? handleMouseUp : undefined}
-            style={isThumb
-              ? { height: svgHeight, width: '100%' }
-              : zoom === 1
-                ? { height: svgHeight, width: '100%' }
-                : { width: VIEW_W * zoom, height: VIEW_H * zoom }
-            }
-            role="img"
-            aria-label="抽取实例关系图谱"
-          >
-            <defs>
-              <marker id="ig-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-                <path d="M0,0 L0,6 L9,3 z" fill="#94a3b8" />
-              </marker>
-              <marker id="ig-arrow-violation" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-                <path d="M0,0 L0,6 L9,3 z" fill="#f43f5e" />
-              </marker>
-            </defs>
-
-            {/* 边 */}
-            {graph.edges.map((e, i) => {
-              const from = graph.nodes.find(n => n.id === e.from)
-              const to = graph.nodes.find(n => n.id === e.to)
-              if (!from || !to) return null
-              const fromOv = dragOverride.get(e.from)
-              const toOv = dragOverride.get(e.to)
-              const fx = fromOv?.x ?? from.x
-              const fy = fromOv?.y ?? from.y
-              const tx = toOv?.x ?? to.x
-              const ty = toOv?.y ?? to.y
-              const hasViolation = from.violations.length > 0 || to.violations.length > 0
-              const stroke = hasViolation ? '#f43f5e' : '#94a3b8'
-              // 同节点对边索引错开弯曲
-              const samePairIdx = graph.edges.filter(e2 =>
-                (e2.from === e.from && e2.to === e.to) || (e2.from === e.to && e2.to === e.from)
-              ).indexOf(e)
-              const r = 16
-              const { path, midX, midY } = curvePath(fx, fy, tx, ty, r, samePairIdx)
-              return (
-                <g key={i}>
-                  <path
-                    d={path}
-                    fill="none"
-                    stroke={stroke}
-                    strokeWidth={hasViolation ? 2 : 1.5}
-                    markerEnd={hasViolation ? 'url(#ig-arrow-violation)' : 'url(#ig-arrow)'}
-                    opacity={0.75}
-                  />
-                  {e.label && !isThumb && (
-                    <text
-                      x={midX}
-                      y={midY}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      fontSize="9"
-                      fill={hasViolation ? '#f43f5e' : '#64748b'}
-                      className="pointer-events-none select-none"
-                      style={{ paintOrder: 'stroke', stroke: 'white', strokeWidth: 3, strokeLinejoin: 'round' }}
-                    >
-                      {e.label}
-                    </text>
-                  )}
-                </g>
-              )
-            })}
-
-            {/* 节点 */}
-            {graph.nodes.map(n => {
-              const hasViolation = n.violations.length > 0
-              const hex = n.scope === 'CORE' ? '#0f172a' : domainHex(n.domainCode)
-              const isSelected = n.id === selected
-              const isHovered = n.id === hovered
-              const r = 16
-              const ov = dragOverride.get(n.id)
-              const nx = ov?.x ?? n.x
-              const ny = ov?.y ?? n.y
-              return (
-                <g
-                  key={n.id}
-                  transform={`translate(${nx},${ny})`}
-                  className={cn(!isThumb && 'cursor-grab active:cursor-grabbing transition-all')}
-                  onMouseDown={!isThumb ? (ev) => handleNodeMouseDown(ev, n.id) : undefined}
-                  onClick={(ev) => {
-                    if (isThumb) return
-                    ev.stopPropagation()
-                    setSelected(n.id)
-                  }}
-                  onMouseEnter={() => !isThumb && setHovered(n.id)}
-                  onMouseLeave={() => !isThumb && setHovered(null)}
-                >
-                  {(isSelected || isHovered) && (
-                    <circle r={r + 5} fill="none" stroke={hasViolation ? '#f43f5e' : hex} strokeWidth="1.5" opacity="0.4" strokeDasharray="2,2" />
-                  )}
-                  <circle
-                    r={r}
-                    fill={hasViolation ? '#fee2e2' : (n.scope === 'CORE' ? 'white' : hex)}
-                    stroke={hasViolation ? '#f43f5e' : hex}
-                    strokeWidth={hasViolation ? 2.5 : 1.5}
-                  />
-                  <text
-                    y={r + 13}
-                    textAnchor="middle"
-                    className="pointer-events-none select-none"
-                    fontSize={isThumb ? 9 : 11}
-                    fontWeight="500"
-                    style={{ fill: 'var(--foreground)' }}
-                  >
-                    {n.label.length > 8 ? n.label.slice(0, 7) + '…' : n.label}
-                  </text>
-                  {n.subLabel && !isThumb && (
-                    <text
-                      y={r + 25}
-                      textAnchor="middle"
-                      className="pointer-events-none select-none"
-                      fontSize="9"
-                      fill="#94a3b8"
-                    >
-                      {n.subLabel}
-                    </text>
-                  )}
-                  {/* 违规角标 */}
-                  {hasViolation && (
-                    <g transform={`translate(${r - 2},${-r + 2})`}>
-                      <circle r="7" fill="#f43f5e" />
-                      <text
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        fontSize="9"
-                        fontWeight="700"
-                        fill="white"
-                        className="pointer-events-none select-none"
-                      >!</text>
-                    </g>
-                  )}
-                </g>
-              )
-            })}
-          </svg>
+          {isThumb ? instanceSvg : (
+            <TransformWrapper ref={transformRef} minScale={0.2} maxScale={4} centerOnInit limitToBounds={false}>
+              <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full">
+                {instanceSvg}
+              </TransformComponent>
+            </TransformWrapper>
+          )}
 
           {/* 悬浮 tooltip */}
           {hoveredNode && !isThumb && (
@@ -802,9 +795,7 @@ export function InstanceGraph({ extracted, findings, domainCode, height = 'full'
           )}
 
           {/* 统计浮层 */}
-          <div className="pointer-events-none absolute bottom-2 right-3 rounded-md bg-white/80 px-2 py-1 text-[10px] text-muted-foreground backdrop-blur dark:bg-slate-900/80">
-            {graph.nodes.length} 实体 · {graph.edges.length} 关系{violatedCount > 0 ? ` · ${violatedCount} 违规` : ''}
-          </div>
+          {statsBadge}
 
           {/* 缩放控件（仅 full） */}
           {!isThumb && (
@@ -819,14 +810,16 @@ export function InstanceGraph({ extracted, findings, domainCode, height = 'full'
                 <option value="force">{layoutLabel('force')}</option>
                 <option value="radial">{layoutLabel('radial')}</option>
               </select>
-              <Button size="sm" variant="outline" className="h-7 px-2" onClick={() => setZoom(z => Math.max(0.5, z - 0.2))} aria-label="缩小">
+              <Button size="sm" variant="outline" className="h-7 px-2" onClick={() => transformRef.current?.zoomOut()} aria-label="缩小">
                 <ZoomOut className="size-3" />
               </Button>
-              <span className="w-10 text-center text-[10px] font-mono text-muted-foreground">{Math.round(zoom * 100)}%</span>
-              <Button size="sm" variant="outline" className="h-7 px-2" onClick={() => setZoom(z => Math.min(4, z + 0.2))} aria-label="放大">
+              <Button size="sm" variant="outline" className="h-7 px-2" onClick={() => transformRef.current?.zoomIn()} aria-label="放大">
                 <ZoomIn className="size-3" />
               </Button>
-              <Button size="sm" variant="outline" className="h-7 px-2" onClick={() => setZoom(1)} aria-label="重置">
+              <Button size="sm" variant="outline" className="h-7 px-2" onClick={() => transformRef.current?.resetTransform()} aria-label="重置">
+                <span className="text-[10px]">100%</span>
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 px-2" onClick={() => setFullscreen(true)} aria-label="全屏">
                 <Maximize2 className="size-3" />
               </Button>
             </div>

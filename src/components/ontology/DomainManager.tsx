@@ -149,18 +149,19 @@ export function DomainManager({ onNavigate }: { onNavigate: (k: 'concepts' | 'ru
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* 单领域图谱 */}
+      {/* 单领域图谱 —— 直接全屏覆盖，不用 Dialog（避免事件冲突） */}
       {graphDomain && (
-        <DomainGraphDialog domain={graphDomain} onClose={() => setGraphDomain(null)} />
+        <DomainGraphOverlay domain={graphDomain} onClose={() => setGraphDomain(null)} />
       )}
     </div>
   )
 }
 
 /**
- * 单领域概念关系图弹窗：拉取该领域的 concepts + relations，用 DomainConceptGraph 渲染。
+ * 单领域概念关系图全屏覆盖层：拉取该领域的 concepts + relations，用 DomainConceptGraph 渲染。
+ * 不用 Dialog（Radix Dialog 的事件拦截与 TransformWrapper 冲突），直接 fixed 覆盖。
  */
-function DomainGraphDialog({ domain, onClose }: { domain: Domain; onClose: () => void }) {
+function DomainGraphOverlay({ domain, onClose }: { domain: Domain; onClose: () => void }) {
   const [nodes, setNodes] = React.useState<DomainGraphNode[]>([])
   const [edges, setEdges] = React.useState<DomainGraphEdge[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -172,8 +173,6 @@ function DomainGraphDialog({ domain, onClose }: { domain: Domain; onClose: () =>
       .then(r => r.json())
       .then((detail: any) => {
         if (!alive) return
-        // detail.concepts: [{ localName, concept?: {labelZh, ...} }]
-        // detail.relations: [{ name, relationType, sourceDomainConceptId, targetDomainConceptId }]
         const idToLocalName = new Map<string, string>()
         const conceptNodes: DomainGraphNode[] = []
         for (const dc of detail.concepts ?? []) {
@@ -196,27 +195,37 @@ function DomainGraphDialog({ domain, onClose }: { domain: Domain; onClose: () =>
     return () => { alive = false }
   }, [domain.id])
 
+  // ESC 关闭
+  React.useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-5xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Share2 className="size-4 text-primary" />
-            「{domain.nameZh}」领域图谱
-          </DialogTitle>
-          <DialogDescription>该领域的概念与关系（单领域视图，非全局）</DialogDescription>
-        </DialogHeader>
-        <div className="max-h-[70vh] overflow-auto">
-          {loading ? (
-            <div className="py-12 text-center text-sm text-muted-foreground">加载中…</div>
-          ) : err ? (
-            <div className="py-12 text-center text-sm text-rose-500">加载失败：{err}</div>
-          ) : (
-            <DomainConceptGraph title="概念关系图" nodes={nodes} edges={edges} />
-          )}
+    <div className="fixed inset-0 z-50 flex flex-col gap-3 bg-background p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Share2 className="size-5 text-primary" />
+          <div>
+            <div className="text-sm font-semibold text-foreground">「{domain.nameZh}」领域图谱</div>
+            <div className="text-[10px] text-muted-foreground">拖动空白处平移，滚轮缩放，拖动节点改位置</div>
+          </div>
         </div>
-      </DialogContent>
-    </Dialog>
+        <Button size="sm" variant="outline" onClick={onClose}>
+          <X className="size-3.5" /> 关闭
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1">
+        {loading ? (
+          <div className="py-12 text-center text-sm text-muted-foreground">加载中…</div>
+        ) : err ? (
+          <div className="py-12 text-center text-sm text-rose-500">加载失败：{err}</div>
+        ) : (
+          <DomainConceptGraph title="概念关系图" nodes={nodes} edges={edges} bare />
+        )}
+      </div>
+    </div>
   )
 }
 
